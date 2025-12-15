@@ -141,12 +141,11 @@ public class FateAiService {
                         2. **内容风格**：参考古籍与现代结合。必须指出具体的刑冲合害。
                            - 例如："丙午流年，子午冲，水火激战，需防心血管疾病或破财。"
                            - 例如："甲申流年，伤官见官，职场是非多。"
-                        3. **评分**：请根据流年喜忌给出一个 0-100 的分数。
-                        4. 每个流年一定要同时给出 K 线四价与趋势：open/close/high/low/trend。
-                        5. K 线具有连贯性，当前的open是以前一年的close为基础，吉的close在上面，凶的close在下面，吉一定是比前一年的分数高，凶一定是比前一年的分数低。如果是吉，trend为Bullish，如果是凶，trend为Bearish。
-                        6. 四价和评语内容，一定要符合人的客观成长历程并结合八字测算得出结论，无需美化数据。
-                        7. 请返回 JSON 格式，包含 items 数组，禁止输出 Markdown 或代码块。
-                           输出示例：{"items":[{"age":0,"score":60,"content":"...", "open":60,"close":60,"high":65,"low":55,"trend":"Bullish"}]}
+                        3. 请根据流年喜忌给出 K 线四价与趋势：open/close/high/low/trend，分数score是close-open的绝对值。
+                        4. K 线具有连贯性，当前的open是以前一年的close为基础，吉的close在上面，凶的close在下面，吉一定是比前一年的分数高，凶一定是比前一年的分数低。如果是吉，trend为Bullish，如果是凶，trend为Bearish。
+                        5. 四价和评语内容，一定要符合人的客观成长历程并结合八字测算得出结论，无需美化数据。
+                        6. 请返回 JSON 格式，包含 items 数组，禁止输出 Markdown 或代码块。
+                           输出示例：{"items":[{"age":0,"score":20,"content":"...", "open":60,"close":80,"high":65,"low":55,"trend":"Bullish"}]}
                         """,
                 bazi.getYearPillar(), bazi.getMonthPillar(), bazi.getDayPillar(), bazi.getHourPillar(), gender,
                 bazi.getDaYunList().toString()
