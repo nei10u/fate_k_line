@@ -132,17 +132,17 @@ public class FateAiService {
      */
     public List<YearlyBatchResult.YearlyItem> generateYearlyBatch(FateResponse.BaZiInfo bazi, String gender, String requestId) {
         String prompt = String.format("""
-                        你是一位算命经验丰富的老先生。请为用户撰写【0-80岁流年详批全表】。
+                        你是一位算命经验丰富的老先生。请为用户撰写【1-100岁流年详批全表】。
                         用户八字：%s %s %s %s (性别：%s)。
                         大运排盘：%s
 
                         任务要求：
-                        1. 请生成 0岁 到 80岁 (共81条) 的流年运势分析。
+                        1. 请生成 1岁 到 100岁 (共100条) 的流年运势分析。
                         2. **内容风格**：参考古籍与现代结合。必须指出具体的刑冲合害。
                            - 例如："丙午流年，子午冲，水火激战，需防心血管疾病或破财。"
                            - 例如："甲申流年，伤官见官，职场是非多。"
                         3. **评分**：请根据流年喜忌给出一个 0-100 的分数。
-                        4. 每个流年同时给出 K 线四价与趋势：open/close/high/low/trend。若无法给出，请留空或与 score 一致，后端会补齐。
+                        4. 每个流年一定要同时给出 K 线四价与趋势：open/close/high/low/trend。
                         5. 观点一定要客观符合八字测算结论，无需修改数据。
                         6. 请返回 JSON 格式，包含 items 数组，禁止输出 Markdown 或代码块。
                            输出示例：{"items":[{"age":0,"score":60,"content":"...", "open":60,"close":60,"high":65,"low":55,"trend":"Bullish"}]}

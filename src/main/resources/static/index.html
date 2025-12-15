@@ -753,7 +753,16 @@
                         }
                         prevDy = dy;
                     }
-                    const values = kLineData.map(item => [item.open, item.close, item.low, item.high]);
+                    // 仅保留“实体蜡烛”（长方形），去掉上下影线：
+                    // ECharts candlestick 的数据结构是 [open, close, low, high]，
+                    // 将 low/high 收敛到 open/close 区间即可消除上下影线。
+                    const values = kLineData.map(item => {
+                        const open = Number(item.open ?? 0);
+                        const close = Number(item.close ?? 0);
+                        const low = Math.min(open, close);
+                        const high = Math.max(open, close);
+                        return [open, close, low, high];
+                    });
                     const rawData = kLineData;
 
                     const option = {
