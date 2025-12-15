@@ -770,10 +770,15 @@
                     // ECharts candlestick 的数据结构是 [open, close, low, high]，
                     // 将 low/high 收敛到 open/close 区间即可消除上下影线。
                     const values = kLineData.map(item => {
-                        const open = Number(item.open ?? 0);
-                        const close = Number(item.close ?? 0);
-                        const low = Math.min(open, close);
-                        const high = Math.max(open, close);
+                        // 这里让“实体高度”直接反映 score（0~100），而不是上一年的涨跌差值。
+                        // 颜色（吉/凶）由 isBullish(item) 决定（优先 trend，其次 close>=open）。
+                        const score = Math.max(0, Math.min(100, Number(item.score ?? item.close ?? 0) || 0));
+                        const bullish = isBullish(item);
+                        const open = bullish ? 0 : score;
+                        const close = bullish ? score : 0;
+                        // 无影线：low/high 收敛到实体范围
+                        const low = 0;
+                        const high = score;
                         return [open, close, low, high];
                     });
                     const rawData = kLineData;
@@ -862,8 +867,17 @@
                                     borderWidth: 1
                                 },
                                 xAxisIndex: 0,
-                                barMaxWidth: 14,
-                                barWidth: 10
+                                // 蜡烛宽度按“100 年横轴”为目标自适应（避免太细/太宽）
+                                barMaxWidth: (() => {
+                                    const targetCount = Math.max(100, values.length);
+                                    const w = chartDom.clientWidth || 1000;
+                                    return Math.max(4, Math.min(18, Math.floor(w / (targetCount * 1.8))));
+                                })(),
+                                barWidth: (() => {
+                                    const targetCount = Math.max(100, values.length);
+                                    const w = chartDom.clientWidth || 1000;
+                                    return Math.max(4, Math.min(18, Math.floor(w / (targetCount * 1.8))));
+                                })()
                             }
                         ]
                     };
