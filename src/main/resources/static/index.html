@@ -769,16 +769,34 @@
                     // 仅保留“实体蜡烛”（长方形），去掉上下影线：
                     // ECharts candlestick 的数据结构是 [open, close, low, high]，
                     // 将 low/high 收敛到 open/close 区间即可消除上下影线。
-                    const values = kLineData.map(item => {
-                        // 这里让“实体高度”直接反映 score（0~100），而不是上一年的涨跌差值。
-                        // 颜色（吉/凶）由 isBullish(item) 决定（优先 trend，其次 close>=open）。
-                        const score = Math.max(0, Math.min(100, Number(item.score ?? item.close ?? 0) || 0));
-                        const bullish = isBullish(item);
-                        const open = bullish ? 0 : score;
-                        const close = bullish ? score : 0;
-                        // 无影线：low/high 收敛到实体范围
-                        const low = 0;
-                        const high = score;
+                    // K线必须具备“连贯性”：
+                    // - open = 上一年的 close（若后端未给 open，则前端按 prevClose 补齐）
+                    // - close = 当年分数（通常等于 item.close / item.score）
+                    // - 吉/凶颜色不由分数阈值决定，而由 trend(Bullish/Bearish) 或 close>=open 决定
+                    let prevClose = null;
+                    const values = kLineData.map((item, idx) => {
+                        // close 优先用后端 close，其次 score
+                        let close = Number(item.close ?? item.score ?? 0);
+                        if (Number.isNaN(close)) close = 0;
+                        close = Math.max(0, Math.min(100, close));
+
+                        // open：优先用后端 open；否则用上一年的 close；第 1 根缺失则用 close 自身
+                        let open = Number(item.open);
+                        if (Number.isNaN(open)) {
+                            open = (prevClose == null) ? close : prevClose;
+                        }
+                        open = Math.max(0, Math.min(100, open));
+
+                        // 强制连贯：open = prevClose（从第2根开始），避免前端/后端数据不一致导致断层
+                        if (idx > 0 && prevClose != null) {
+                            open = prevClose;
+                        }
+
+                        // 无影线矩形：low/high 收敛到实体范围
+                        const low = Math.min(open, close);
+                        const high = Math.max(open, close);
+
+                        prevClose = close;
                         return [open, close, low, high];
                     });
                     const rawData = kLineData;
