@@ -143,8 +143,9 @@ public class FateAiService {
                            - 例如："甲申流年，伤官见官，职场是非多。"
                         3. **评分**：请根据流年喜忌给出一个 0-100 的分数。
                         4. 每个流年一定要同时给出 K 线四价与趋势：open/close/high/low/trend。
-                        5. 观点一定要客观符合八字测算结论，无需修改数据。
-                        6. 请返回 JSON 格式，包含 items 数组，禁止输出 Markdown 或代码块。
+                        5. K 线具有连贯性，当前的open是以前一年的close为基础，吉的close在上面，凶的close在下面，吉一定是比前一年的分数高，凶一定是比前一年的分数低。如果是吉，trend为Bullish，如果是凶，trend为Bearish。
+                        6. 四价和评语内容，一定要符合人的客观成长历程并结合八字测算得出结论，无需美化数据。
+                        7. 请返回 JSON 格式，包含 items 数组，禁止输出 Markdown 或代码块。
                            输出示例：{"items":[{"age":0,"score":60,"content":"...", "open":60,"close":60,"high":65,"low":55,"trend":"Bullish"}]}
                         """,
                 bazi.getYearPillar(), bazi.getMonthPillar(), bazi.getDayPillar(), bazi.getHourPillar(), gender,
@@ -159,7 +160,7 @@ public class FateAiService {
         } catch (Exception e) {
             log.error("[{}] AI 流年生成失败: {}", requestId, e.getMessage(), e);
             if (!fallbackEnabled) {
-                throw e instanceof RuntimeException re ? re : new RuntimeException(e);
+                throw (RuntimeException) e;
             }
             return Collections.emptyList();
         }
