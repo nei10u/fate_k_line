@@ -449,6 +449,20 @@
                         <p class="text-xs text-gray-500 mt-1">Green for Good (Web3 Style) / Red for Bad</p>
                     </div>
                     <div class="flex items-center space-x-4 text-xs font-semibold">
+                        <div
+                            class="flex items-center space-x-2 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1">
+                            <span class="text-[11px] font-bold text-slate-600">视图</span>
+                            <button type="button" @click="chartMode='continuous'"
+                                :class="chartMode==='continuous' ? 'bg-indigo-600 text-white' : 'bg-white text-slate-700 hover:bg-slate-100'"
+                                class="px-2 py-1 rounded-md text-[11px] font-bold border border-slate-200">
+                                连贯K线
+                            </button>
+                            <button type="button" @click="chartMode='absolute'"
+                                :class="chartMode==='absolute' ? 'bg-indigo-600 text-white' : 'bg-white text-slate-700 hover:bg-slate-100'"
+                                class="px-2 py-1 rounded-md text-[11px] font-bold border border-slate-200">
+                                分数蜡烛
+                            </button>
+                        </div>
                         <span class="flex items-center"><span class="w-3 h-3 bg-green-500 rounded-sm mr-1.5"></span> 吉运
                             (Long)</span>
                         <span class="flex items-center"><span class="w-3 h-3 bg-red-500 rounded-sm mr-1.5"></span> 凶运
@@ -487,7 +501,7 @@
                             </tr>
                         </thead>
                         <tbody v-if="result.kLineData.length > 0" class="bg-white divide-y divide-gray-100">
-                            <tr v-for="item in result.kLineData" :key="item.age"
+                            <tr v-for="(item, idx) in result.kLineData" :key="item.age"
                                 class="hover:bg-indigo-50/50 transition-colors group">
                                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
                                     <span class="font-bold text-indigo-900 text-base">{{ item.age }}岁</span>
@@ -501,7 +515,7 @@
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap">
                                     <span class="px-2.5 py-0.5 inline-flex text-xs font-bold rounded-full"
-                                        :class="isBullish(item) ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'">
+                                        :class="isBullish(item, idx, result.kLineData) ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'">
                                         {{ item.score }}
                                     </span>
                                 </td>
@@ -545,7 +559,7 @@
     </div>
 
     <script>
-        const { createApp, ref, reactive, nextTick, computed } = Vue;
+        const { createApp, ref, reactive, nextTick, computed, watch } = Vue;
 
         createApp({
             setup() {
@@ -578,6 +592,11 @@
                     kLineData: []
                 });
 
+                // 图表展示模式：
+                // - continuous: 连贯K线（open=上一年close, close=当年score）
+                // - absolute: 分数蜡烛（从0到score，高度严格等于score），颜色按 trend/上一年对比
+                const chartMode = ref('continuous');
+
                 let chartInstance = null;
 
                 const resetResult = () => {
@@ -606,11 +625,19 @@
 
                 // 统一“牛/熊（吉/凶）”判定逻辑：
                 // 1) 优先使用后端的 trend（Bullish/Bearish）
-                // 2) 否则使用 close >= open（相对上一年的涨跌）
-                const isBullish = (item) => {
+                // 2) 否则使用“与前一年 score 比较”（更符合“吉一定比前一年高/凶一定比前一年低”的语义）
+                // 3) 兜底使用 close >= open（若有）
+                const isBullish = (item, idx, arr) => {
                     const t = String(item?.trend ?? '').toLowerCase();
                     if (t.includes('bull') || t.includes('long') || t.includes('up')) return true;
                     if (t.includes('bear') || t.includes('short') || t.includes('down')) return false;
+
+                    if (Array.isArray(arr) && typeof idx === 'number' && idx > 0) {
+                        const curr = Number(arr[idx]?.score ?? arr[idx]?.close ?? 0);
+                        const prev = Number(arr[idx - 1]?.score ?? arr[idx - 1]?.close ?? 0);
+                        if (!Number.isNaN(curr) && !Number.isNaN(prev)) return curr >= prev;
+                    }
+
                     const open = Number(item?.open);
                     const close = Number(item?.close);
                     if (!Number.isNaN(open) && !Number.isNaN(close)) return close >= open;
@@ -766,39 +793,59 @@
                         }
                         prevDy = dy;
                     }
-                    // 仅保留“实体蜡烛”（长方形），去掉上下影线：
-                    // ECharts candlestick 的数据结构是 [open, close, low, high]，
-                    // 将 low/high 收敛到 open/close 区间即可消除上下影线。
-                    // K线必须具备“连贯性”：
-                    // - open = 上一年的 close（若后端未给 open，则前端按 prevClose 补齐）
-                    // - close = 当年分数（通常等于 item.close / item.score）
-                    // - 吉/凶颜色不由分数阈值决定，而由 trend(Bullish/Bearish) 或 close>=open 决定
-                    let prevClose = null;
-                    const values = kLineData.map((item, idx) => {
-                        // close 优先用后端 close，其次 score
-                        let close = Number(item.close ?? item.score ?? 0);
-                        if (Number.isNaN(close)) close = 0;
-                        close = Math.max(0, Math.min(100, close));
+                    // 两种视图：
+                    // 1) continuous: 连贯K线（open=上一年close, close=当年score），实体高度=两年差值
+                    // 2) absolute: 分数蜡烛（从0到score），实体高度=score
+                    // 共同点：无影线矩形（low/high 收敛到实体范围），颜色由 trend/上一年对比决定
 
-                        // open：优先用后端 open；否则用上一年的 close；第 1 根缺失则用 close 自身
-                        let open = Number(item.open);
-                        if (Number.isNaN(open)) {
-                            open = (prevClose == null) ? close : prevClose;
-                        }
-                        open = Math.max(0, Math.min(100, open));
+                    // 预计算每年的 score（作为 close 的语义）
+                    const scores = kLineData.map(item => {
+                        let s = Number(item?.score ?? item?.close ?? 0);
+                        if (Number.isNaN(s)) s = 0;
+                        return Math.max(0, Math.min(100, s));
+                    });
 
-                        // 强制连贯：open = prevClose（从第2根开始），避免前端/后端数据不一致导致断层
-                        if (idx > 0 && prevClose != null) {
-                            open = prevClose;
-                        }
+                    const valuesContinuous = (() => {
+                        // 约束：
+                        // 1) open = 上一年 close
+                        // 2) |close - open| = 当年 score
+                        // 3) 吉/凶方向由 trend（优先）或“与前一年 score 比较”决定
+                        let prevClose = null;
+                        return kLineData.map((item, idx) => {
+                            const score = scores[idx];
 
-                        // 无影线矩形：low/high 收敛到实体范围
-                        const low = Math.min(open, close);
-                        const high = Math.max(open, close);
+                            // open：严格连贯
+                            let open;
+                            if (idx === 0) {
+                                // 首根没有“上一年”，用 0 作为基线（可视化语义更稳定）
+                                open = 0;
+                            } else {
+                                open = prevClose == null ? 0 : prevClose;
+                            }
 
-                        prevClose = close;
+                            const bullish = isBullish(item, idx, kLineData);
+                            let close = bullish ? (open + score) : (open - score);
+
+                            // 无影线矩形：low/high 收敛到实体范围
+                            const low = Math.min(open, close);
+                            const high = Math.max(open, close);
+
+                            prevClose = close;
+                            return [open, close, low, high];
+                        });
+                    })();
+
+                    const valuesAbsolute = kLineData.map((item, idx) => {
+                        const score = scores[idx];
+                        const bullish = isBullish(item, idx, kLineData);
+                        const open = bullish ? 0 : score;
+                        const close = bullish ? score : 0;
+                        const low = 0;
+                        const high = score;
                         return [open, close, low, high];
                     });
+
+                    const values = chartMode.value === 'absolute' ? valuesAbsolute : valuesContinuous;
                     const rawData = kLineData;
 
                     const option = {
@@ -817,7 +864,7 @@
                                 if (!params || params.length === 0) return '';
                                 const index = params[0].dataIndex;
                                 const item = rawData[index];
-                                const bullish = isBullish(item);
+                                const bullish = isBullish(item, index, rawData);
                                 const scoreColor = bullish ? 'text-green-600' : 'text-red-600';
                                 const trendText = bullish ? '吉 (Long)' : '凶 (Short)';
 
@@ -862,8 +909,9 @@
                             }
                         ],
                         yAxis: {
-                            min: 0,
-                            max: 100,
+                            // 既保留 0~100 的参考，又允许“连贯K线”按 score 累积漂移不被裁剪
+                            min: function (val) { return Math.floor(Math.min(0, val.min)); },
+                            max: function (val) { return Math.ceil(Math.max(100, val.max)); },
                             splitNumber: 4,
                             axisLabel: { color: '#64748b' },
                             splitLine: { lineStyle: { color: '#f1f5f9' } }
@@ -912,6 +960,12 @@
                     return '全部完成';
                 });
 
+                watch(chartMode, async () => {
+                    if (!result.kLineData || result.kLineData.length === 0) return;
+                    await nextTick();
+                    initChart(result.kLineData);
+                });
+
                 return {
                     status,
                     hasResult,
@@ -923,6 +977,7 @@
                     isBusy,
                     requestId,
                     isBullish,
+                    chartMode,
                     resetResult,
                     runStep
                 };
