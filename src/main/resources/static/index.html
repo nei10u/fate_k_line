@@ -1,0 +1,900 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fate K-Line | AI 命理大模型</title>
+
+    <!-- 1. 引入 Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- 2. 引入 Vue 3 -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+
+    <!-- 3. 引入 ECharts -->
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f8fafc;
+        }
+
+        [v-cloak] {
+            display: none;
+        }
+
+        .loading-spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            border-left-color: #4f46e5;
+            animation: spin 1s ease infinite;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        /* 简易 line-clamp（不依赖 Tailwind 插件） */
+        .line-clamp-3 {
+            display: -webkit-box;
+            -webkit-box-orient: vertical;
+            -webkit-line-clamp: 3;
+            overflow: hidden;
+            line-clamp: 3;
+        }
+
+        .line-clamp-6 {
+            display: -webkit-box;
+            -webkit-box-orient: vertical;
+            -webkit-line-clamp: 6;
+            overflow: hidden;
+            line-clamp: 6;
+        }
+
+        /* 报告卡片：统一高度，避免内容撑高导致视觉不齐 */
+        .report-grid {
+            align-items: stretch;
+        }
+
+        .report-card {
+            height: 240px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        @media (max-width: 767px) {
+            .report-card {
+                height: auto;
+            }
+        }
+    </style>
+</head>
+
+<body class="text-slate-800">
+
+    <div id="app" v-cloak class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+
+        <!-- 顶部标题 -->
+        <div class="text-center mb-10">
+            <h1 class="text-4xl font-extrabold tracking-tight text-slate-900 sm:text-5xl">
+                <span class="block text-indigo-600">Fate K-Line</span>
+                <span class="block text-2xl mt-2 font-medium text-slate-500">洞悉命运起伏 · 预见人生轨迹</span>
+            </h1>
+        </div>
+        <!-- 全局加载遮罩 -->
+        <div v-if="isBusy" class="fixed inset-0 z-40 bg-white/70 backdrop-blur-sm flex items-center justify-center">
+            <div class="flex items-center space-x-3 text-indigo-700 font-semibold text-sm">
+                <span class="loading-spinner h-6 w-6 border-2"></span>
+                <span>执行中，请稍候...</span>
+            </div>
+        </div>
+
+        <!-- 输入表单区域 -->
+        <div v-if="!hasResult" class="max-w-lg mx-auto bg-white shadow-xl rounded-2xl overflow-hidden p-8">
+            <h2 class="text-xl font-bold mb-6 text-gray-800 flex items-center">
+                <svg class="w-6 h-6 mr-2 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                </svg>
+                输入出生信息
+            </h2>
+
+            <form @submit.prevent="runStep" class="space-y-5">
+                <!-- 第一行：年月日 -->
+                <div class="grid grid-cols-3 gap-4">
+                    <div class="col-span-1">
+                        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">年份</label>
+                        <input v-model.number="form.year" type="number"
+                            class="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2.5"
+                            placeholder="2000">
+                    </div>
+                    <div class="col-span-1">
+                        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">月份</label>
+                        <select v-model.number="form.month"
+                            class="block w-full rounded-md border-gray-300 shadow-sm border p-2.5 bg-white">
+                            <option v-for="m in 12" :key="m" :value="m">{{ m }}月</option>
+                        </select>
+                    </div>
+                    <div class="col-span-1">
+                        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">日期</label>
+                        <select v-model.number="form.day"
+                            class="block w-full rounded-md border-gray-300 shadow-sm border p-2.5 bg-white">
+                            <option v-for="d in 31" :key="d" :value="d">{{ d }}日</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- 第二行：时间、分钟、性别 -->
+                <div class="grid grid-cols-3 gap-4">
+                    <div class="col-span-1">
+                        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">时辰
+                            (小时)</label>
+                        <select v-model.number="form.hour"
+                            class="block w-full rounded-md border-gray-300 shadow-sm border p-2.5 bg-white">
+                            <option v-for="h in 24" :key="h" :value="h-1">{{ h-1 < 10 ? '0' +(h-1) : h-1 }}点</option>
+                        </select>
+                    </div>
+                    <div class="col-span-1">
+                        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">分钟</label>
+                        <select v-model.number="form.minute"
+                            class="block w-full rounded-md border-gray-300 shadow-sm border p-2.5 bg-white">
+                            <option value="0">00分</option>
+                            <option value="1">01分</option>
+                            <option value="2">02分</option>
+                            <option value="3">03分</option>
+                            <option value="4">04分</option>
+                            <option value="5">05分</option>
+                            <option value="6">06分</option>
+                            <option value="7">07分</option>
+                            <option value="8">08分</option>
+                            <option value="9">09分</option>
+
+                            <option value="10">10分</option>
+                            <option value="11">11分</option>
+                            <option value="12">12分</option>
+                            <option value="13">13分</option>
+                            <option value="14">14分</option>
+                            <option value="15">15分</option>
+                            <option value="16">16分</option>
+                            <option value="17">17分</option>
+                            <option value="18">18分</option>
+                            <option value="19">19分</option>
+
+                            <option value="20">20分</option>
+                            <option value="21">21分</option>
+                            <option value="22">22分</option>
+                            <option value="23">23分</option>
+                            <option value="24">24分</option>
+                            <option value="25">25分</option>
+                            <option value="26">26分</option>
+                            <option value="27">27分</option>
+                            <option value="28">28分</option>
+                            <option value="29">29分</option>
+
+                            <option value="30">30分</option>
+                            <option value="31">31分</option>
+                            <option value="32">32分</option>
+                            <option value="33">33分</option>
+                            <option value="34">34分</option>
+                            <option value="35">35分</option>
+                            <option value="36">36分</option>
+                            <option value="37">37分</option>
+                            <option value="38">38分</option>
+                            <option value="39">39分</option>
+
+                            <option value="40">40分</option>
+                            <option value="41">41分</option>
+                            <option value="42">42分</option>
+                            <option value="43">43分</option>
+                            <option value="44">44分</option>
+                            <option value="45">45分</option>
+                            <option value="46">46分</option>
+                            <option value="47">47分</option>
+                            <option value="48">48分</option>
+                            <option value="49">49分</option>
+
+                            <option value="50">50分</option>
+                            <option value="51">51分</option>
+                            <option value="52">52分</option>
+                            <option value="53">53分</option>
+                            <option value="54">54分</option>
+                            <option value="55">55分</option>
+                            <option value="56">56分</option>
+                            <option value="57">57分</option>
+                            <option value="58">58分</option>
+                            <option value="59">59分</option>
+                        </select>
+                    </div>
+                    <div class="col-span-1">
+                        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">性别</label>
+                        <select v-model="form.gender"
+                            class="block w-full rounded-md border-gray-300 shadow-sm border p-2.5 bg-white">
+                            <option value="男">男</option>
+                            <option value="女">女</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- 第三行：城市 (新增) -->
+                <div>
+                    <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">出生城市
+                        (用于真太阳时)</label>
+                    <input v-model="form.city" type="text"
+                        class="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm border p-2.5"
+                        placeholder="例如：北京、上海、深圳">
+                </div>
+
+                <button type="submit" :disabled="stepDisabled || currentStep > 4"
+                    class="w-full flex justify-center py-3.5 px-4 border border-transparent rounded-lg shadow-sm text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-all disabled:opacity-70 disabled:cursor-not-allowed mt-4">
+                    <span v-if="stepDisabled && currentStep <=4" class="loading-spinner mr-3 h-5 w-5 border-2"></span>
+                    {{ stepButtonText }}
+                </button>
+            </form>
+            <p class="text-xs text-center text-gray-400 mt-4">
+                注：AI 分析基于古代子平术与现代大模型推理，仅供娱乐参考。
+            </p>
+        </div>
+
+        <!-- 结果展示区域 -->
+        <div v-else class="space-y-8 animate-fade-in-up">
+
+            <div
+                class="flex flex-col sm:flex-row sm:items-center sm:justify-between bg-white px-4 py-3 rounded-xl border border-gray-100 shadow-sm">
+                <div class="text-sm text-gray-600">
+                    当前步骤：<span class="font-semibold text-indigo-600">{{ currentStep <=4 ? stepButtonText : '全部完成'
+                            }}</span>
+                            <span v-if="requestId" class="ml-2 text-xs text-gray-400">ID: {{ requestId }}</span>
+                </div>
+                <div class="flex items-center space-x-3 mt-3 sm:mt-0">
+                    <button @click="runStep" :disabled="isBusy || currentStep > 4"
+                        class="inline-flex items-center px-3 py-2 rounded-lg text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-70 disabled:cursor-not-allowed">
+                        <span v-if="isBusy && currentStep<=4" class="loading-spinner mr-2 h-4 w-4 border-2"></span>
+                        {{ currentStep > 4 ? '已完成' : stepButtonText }}
+                    </button>
+                </div>
+            </div>
+
+            <!-- 1. 八字基础信息卡片 -->
+            <div v-if="result.baziInfo"
+                class="bg-slate-900 text-white rounded-2xl p-8 shadow-2xl relative overflow-hidden">
+                <div
+                    class="absolute top-0 right-0 -mt-4 -mr-4 w-32 h-32 bg-indigo-500 rounded-full opacity-20 filter blur-xl">
+                </div>
+
+                <div class="flex flex-col md:flex-row justify-between items-center z-10 relative">
+                    <div class="text-center md:text-left mb-6 md:mb-0">
+                        <h2 class="text-2xl font-bold">八字排盘完成</h2>
+                        <p class="text-slate-400 mt-1 text-sm">
+                            {{ form.year }}年{{ form.month }}月{{ form.day }}日 {{ form.hour < 10 ? '0' +form.hour :
+                                form.hour }}:{{ form.minute < 10 ? '0' +form.minute : form.minute }} | {{ form.city }} |
+                                {{ form.gender }}命 </p>
+                    </div>
+                    <div class="flex space-x-2 md:space-x-4 text-center">
+                        <div class="bg-slate-800 p-3 md:p-4 rounded-lg w-20 md:w-24 border border-slate-700">
+                            <div class="text-[10px] md:text-xs text-slate-500 uppercase">年柱</div>
+                            <div class="text-xl md:text-2xl font-bold text-yellow-500 font-serif">{{
+                                result.baziInfo.yearPillar }}</div>
+                        </div>
+                        <div class="bg-slate-800 p-3 md:p-4 rounded-lg w-20 md:w-24 border border-slate-700">
+                            <div class="text-[10px] md:text-xs text-slate-500 uppercase">月柱</div>
+                            <div class="text-xl md:text-2xl font-bold text-yellow-500 font-serif">{{
+                                result.baziInfo.monthPillar }}</div>
+                        </div>
+                        <div class="bg-slate-800 p-3 md:p-4 rounded-lg w-20 md:w-24 border border-slate-700">
+                            <div class="text-[10px] md:text-xs text-slate-500 uppercase">日柱</div>
+                            <div class="text-xl md:text-2xl font-bold text-yellow-500 font-serif">{{
+                                result.baziInfo.dayPillar }}</div>
+                        </div>
+                        <div class="bg-slate-800 p-3 md:p-4 rounded-lg w-20 md:w-24 border border-slate-700">
+                            <div class="text-[10px] md:text-xs text-slate-500 uppercase">时柱</div>
+                            <div class="text-xl md:text-2xl font-bold text-yellow-500 font-serif">{{
+                                result.baziInfo.hourPillar }}</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 2. AI 深度评测卡片 -->
+            <div v-if="result.analysisReport" class="grid grid-cols-1 md:grid-cols-2 gap-6 report-grid">
+                <!-- 命理总评 -->
+                <div
+                    class="bg-white p-6 rounded-2xl shadow-lg border-l-4 border-indigo-500 hover:shadow-xl transition-shadow report-card">
+                    <div class="flex justify-between items-center mb-4">
+                        <h4 class="font-bold text-lg text-indigo-700 flex items-center">
+                            <span class="text-2xl mr-2">🔮</span> 命理总评
+                        </h4>
+                        <span v-if="result.analysisReport"
+                            class="px-3 py-1 bg-indigo-50 text-indigo-700 rounded-full text-sm font-bold">{{
+                            result.analysisReport.overall.score || 0 }} 分</span>
+                        <span v-else class="text-xs text-gray-400">生成中...</span>
+                    </div>
+                    <p v-if="result.analysisReport"
+                        class="text-gray-600 leading-relaxed text-sm text-justify line-clamp-6">{{
+                        result.analysisReport.overall.content }}</p>
+                    <p v-else class="text-gray-400 text-sm line-clamp-6">AI 正在撰写命理总评...</p>
+                </div>
+
+                <!-- 投资/交易运势 -->
+                <div
+                    class="bg-white p-6 rounded-2xl shadow-lg border-l-4 border-yellow-500 hover:shadow-xl transition-shadow report-card">
+                    <div class="flex justify-between items-center mb-4">
+                        <h4 class="font-bold text-lg text-yellow-700 flex items-center">
+                            <span class="text-2xl mr-2">₿</span> 投资/交易
+                        </h4>
+                        <span v-if="result.analysisReport"
+                            class="px-3 py-1 bg-yellow-50 text-yellow-700 rounded-full text-sm font-bold">{{
+                            result.analysisReport.investment.score || 0 }} 分</span>
+                        <span v-else class="text-xs text-gray-400">生成中...</span>
+                    </div>
+                    <p v-if="result.analysisReport"
+                        class="text-gray-600 leading-relaxed text-sm text-justify line-clamp-6">{{
+                        result.analysisReport.investment.content }}</p>
+                    <p v-else class="text-gray-400 text-sm line-clamp-6">AI 正在评估投资风格倾向...</p>
+                </div>
+
+                <!-- 事业 -->
+                <div
+                    class="bg-white p-6 rounded-2xl shadow-lg border-l-4 border-blue-500 hover:shadow-xl transition-shadow report-card">
+                    <div class="flex justify-between items-center mb-4">
+                        <h4 class="font-bold text-lg text-blue-700 flex items-center">
+                            <span class="text-2xl mr-2">🚀</span> 事业成就
+                        </h4>
+                        <span v-if="result.analysisReport"
+                            class="px-3 py-1 bg-blue-50 text-blue-700 rounded-full text-sm font-bold">{{
+                            result.analysisReport.career.score || 0 }} 分</span>
+                        <span v-else class="text-xs text-gray-400">生成中...</span>
+                    </div>
+                    <p v-if="result.analysisReport"
+                        class="text-gray-600 leading-relaxed text-sm text-justify line-clamp-6">{{
+                        result.analysisReport.career.content }}</p>
+                    <p v-else class="text-gray-400 text-sm line-clamp-6">AI 正在分析事业路径...</p>
+                </div>
+
+                <!-- 财富 -->
+                <div
+                    class="bg-white p-6 rounded-2xl shadow-lg border-l-4 border-emerald-500 hover:shadow-xl transition-shadow report-card">
+                    <div class="flex justify-between items-center mb-4">
+                        <h4 class="font-bold text-lg text-emerald-700 flex items-center">
+                            <span class="text-2xl mr-2">💰</span> 财富层级
+                        </h4>
+                        <span v-if="result.analysisReport"
+                            class="px-3 py-1 bg-emerald-50 text-emerald-700 rounded-full text-sm font-bold">{{
+                            result.analysisReport.wealth.score || 0 }} 分</span>
+                        <span v-else class="text-xs text-gray-400">生成中...</span>
+                    </div>
+                    <p v-if="result.analysisReport"
+                        class="text-gray-600 leading-relaxed text-sm text-justify line-clamp-6">{{
+                        result.analysisReport.wealth.content }}</p>
+                    <p v-else class="text-gray-400 text-sm line-clamp-6">AI 正在估算财富节奏...</p>
+                </div>
+
+                <!-- 情感婚姻 -->
+                <div
+                    class="bg-white p-6 rounded-2xl shadow-lg border-l-4 border-rose-500 hover:shadow-xl transition-shadow report-card">
+                    <div class="flex justify-between items-center mb-4">
+                        <h4 class="font-bold text-lg text-rose-700 flex items-center">
+                            <span class="text-2xl mr-2">❤️</span> 情感婚姻
+                        </h4>
+                        <span v-if="result.analysisReport"
+                            class="px-3 py-1 bg-rose-50 text-rose-700 rounded-full text-sm font-bold">{{
+                            result.analysisReport.love.score || 0 }} 分</span>
+                        <span v-else class="text-xs text-gray-400">生成中...</span>
+                    </div>
+                    <p v-if="result.analysisReport"
+                        class="text-gray-600 leading-relaxed text-sm text-justify line-clamp-6">{{
+                        result.analysisReport.love.content }}</p>
+                    <p v-else class="text-gray-400 text-sm line-clamp-6">AI 正在分析情感轨迹...</p>
+                </div>
+
+                <!-- 评分讲解（紧凑版：避免把卡片撑高，保持与其它卡片高度一致的观感） -->
+                <div
+                    class="bg-white p-6 rounded-2xl shadow-lg border-l-4 border-slate-300 hover:shadow-xl transition-shadow report-card">
+                    <div class="flex items-center justify-between mb-3">
+                        <div class="flex items-center space-x-2">
+                            <div
+                                class="w-7 h-7 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 text-sm">
+                                ℹ️</div>
+                            <h3 class="text-lg font-bold text-slate-800">评分讲解</h3>
+                        </div>
+                        <span class="text-slate-400 text-lg">☆</span>
+                    </div>
+                    <div class="space-y-2 text-xs font-semibold">
+                        <div class="flex justify-between items-center border-b border-slate-100 pb-1">
+                            <span class="text-slate-700">0–2分</span>
+                            <span class="px-2 py-0.5 rounded-md text-white font-bold"
+                                style="background:#f87171">极差</span>
+                        </div>
+                        <div class="flex justify-between items-center border-b border-slate-100 pb-1">
+                            <span class="text-slate-700">3–4分</span>
+                            <span class="px-2 py-0.5 rounded-md text-white font-bold"
+                                style="background:#fbbf24">差</span>
+                        </div>
+                        <div class="flex justify-between items-center border-b border-slate-100 pb-1">
+                            <span class="text-slate-700">5–6分</span>
+                            <span class="px-2 py-0.5 rounded-md text-slate-800 font-bold"
+                                style="background:#facc15">一般</span>
+                        </div>
+                        <div class="flex justify-between items-center border-b border-slate-100 pb-1">
+                            <span class="text-slate-700">7–8分</span>
+                            <span class="px-2 py-0.5 rounded-md text-white font-bold"
+                                style="background:#6366f1">好</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-slate-700">9–10分</span>
+                            <span class="px-2 py-0.5 rounded-md text-white font-bold"
+                                style="background:#34d399">极好</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 3. 人生 K 线图 -->
+            <div v-if="result.kLineData.length > 0" class="bg-white p-6 rounded-2xl shadow-lg border border-gray-100">
+                <div class="flex justify-between items-center mb-6">
+                    <div>
+                        <h3 class="text-lg font-bold text-slate-800">人生流年大运 K 线图</h3>
+                        <p class="text-xs text-gray-500 mt-1">Green for Good (Web3 Style) / Red for Bad</p>
+                    </div>
+                    <div class="flex items-center space-x-4 text-xs font-semibold">
+                        <span class="flex items-center"><span class="w-3 h-3 bg-green-500 rounded-sm mr-1.5"></span> 吉运
+                            (Long)</span>
+                        <span class="flex items-center"><span class="w-3 h-3 bg-red-500 rounded-sm mr-1.5"></span> 凶运
+                            (Short)</span>
+                    </div>
+                </div>
+                <div id="kline-chart" style="width: 100%; height: 500px;"></div>
+            </div>
+
+            <!-- 4. 流年详批全表 -->
+            <div v-if="showTable && result.kLineData.length > 0"
+                class="bg-white rounded-2xl shadow-lg overflow-hidden border border-gray-100">
+                <div class="px-6 py-5 border-b border-gray-100 bg-gray-50 flex justify-between items-center">
+                    <h3 class="text-lg font-bold text-gray-800">📅 流年详批全表</h3>
+                    <span class="text-xs text-gray-400">滑动查看更多年份</span>
+                </div>
+                <div class="overflow-x-auto h-[600px] overflow-y-auto custom-scrollbar">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50 sticky top-0 z-10 shadow-sm">
+                            <tr>
+                                <th
+                                    class="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                                    年龄 / 年份</th>
+                                <th
+                                    class="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                                    干支</th>
+                                <th
+                                    class="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                                    大运</th>
+                                <th
+                                    class="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                                    评分</th>
+                                <th
+                                    class="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                                    运势批断</th>
+                            </tr>
+                        </thead>
+                        <tbody v-if="result.kLineData.length > 0" class="bg-white divide-y divide-gray-100">
+                            <tr v-for="item in result.kLineData" :key="item.age"
+                                class="hover:bg-indigo-50/50 transition-colors group">
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                                    <span class="font-bold text-indigo-900 text-base">{{ item.age }}岁</span>
+                                    <span class="ml-1 text-xs text-gray-400">({{ item.year }})</span>
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-800">
+                                    {{ item.ganZhi }}
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                    {{ item.daYun }}
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap">
+                                    <span class="px-2.5 py-0.5 inline-flex text-xs font-bold rounded-full"
+                                        :class="item.score >= 60 ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'">
+                                        {{ item.score }}
+                                    </span>
+                                </td>
+                                <td
+                                    class="px-6 py-4 text-sm text-gray-600 leading-relaxed max-w-xl group-hover:text-gray-900">
+                                    {{ item.description }}
+                                </td>
+                            </tr>
+                        </tbody>
+                        <tbody v-else>
+                            <tr>
+                                <td colspan="5" class="px-6 py-10 text-center text-gray-400 text-sm">
+                                    <div class="flex items-center justify-center space-x-3">
+                                        <span class="loading-spinner"></span>
+                                        <span v-if="status.kline">K 线和流年批注加载中...</span>
+                                        <span v-else>等待生成流年批注...</span>
+                                    </div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="text-center pb-12 pt-4">
+                <button @click="resetResult"
+                    class="inline-flex items-center text-indigo-600 hover:text-indigo-800 font-semibold transition-colors">
+                    <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+                    </svg>
+                    返回重新输入
+                </button>
+                <p class="mt-3 text-xs text-gray-500 leading-5 line-clamp-3">
+                    注：命运还受环境和个人选择影响，八字趋势不能完全代表真实人生，命理学不是玄学，而是帮助我们在人生列车上做出更好选择的哲学工具。
+                    一命二运三风水 四积阴德五读书 六名七相八敬神 九遇贵人十养生。
+                </p>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        const { createApp, ref, reactive, nextTick, computed } = Vue;
+
+        createApp({
+            setup() {
+                const status = reactive({
+                    submitting: false,
+                    bazi: false,
+                    report: false,
+                    yearly: false,
+                    kline: false
+                });
+                const hasResult = ref(false);
+                const requestId = ref('');
+                const currentStep = ref(1); // 1-bazi 2-report 3-kline 4-table
+                const showTable = ref(false);
+
+                const form = ref({
+                    year: 2000,
+                    month: 1,
+                    day: 1,
+                    hour: 10,
+                    minute: 0,
+                    gender: '男',
+                    city: '北京'
+                });
+
+                const result = reactive({
+                    baziInfo: null,
+                    analysisReport: null,
+                    yearlyItems: [],
+                    kLineData: []
+                });
+
+                let chartInstance = null;
+
+                const resetResult = () => {
+                    result.baziInfo = null;
+                    result.analysisReport = null;
+                    result.yearlyItems = [];
+                    result.kLineData = [];
+                    hasResult.value = false;
+                    currentStep.value = 1;
+                    requestId.value = '';
+                    showTable.value = false;
+                    Object.keys(status).forEach(k => status[k] = false);
+                    if (chartInstance) {
+                        chartInstance.dispose();
+                        chartInstance = null;
+                    }
+                };
+
+                const genRequestId = () => {
+                    if (requestId.value) return requestId.value;
+                    requestId.value = `rid-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+                    return requestId.value;
+                };
+
+                const isBusy = computed(() => status.submitting || status.bazi || status.report || status.yearly || status.kline);
+
+                const runStep = async () => {
+                    if (isBusy.value) return;
+                    const payload = { ...form.value, requestId: genRequestId() };
+                    if (currentStep.value === 1) {
+                        await runBazi(payload);
+                        hasResult.value = true;
+                        currentStep.value = 2;
+                        return;
+                    }
+                    if (currentStep.value === 2) {
+                        await runReport(payload);
+                        currentStep.value = 3;
+                        return;
+                    }
+                    if (currentStep.value === 3) {
+                        await runKlineFirst(payload);
+                        currentStep.value = 4;
+                        return;
+                    }
+                    if (currentStep.value === 4) {
+                        await runYearlyFromCache(payload);
+                        showTable.value = true;
+                        currentStep.value = 5; // 完成
+                        return;
+                    }
+                };
+
+                const runBazi = async (payload) => {
+                    status.submitting = true;
+                    status.bazi = true;
+                    try {
+                        const resp = await fetch('/api/fate/bazi', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+                        if (!resp.ok) throw new Error("八字排盘接口异常");
+                        const data = await resp.json();
+                        requestId.value = data.requestId || payload.requestId;
+                        result.baziInfo = data.baziInfo;
+                    } catch (e) {
+                        alert(e.message);
+                    } finally {
+                        status.bazi = false;
+                        status.submitting = false;
+                    }
+                };
+
+                const runReport = async (payload) => {
+                    status.submitting = true;
+                    status.report = true;
+                    try {
+                        const resp = await fetch('/api/fate/report', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+                        if (!resp.ok) throw new Error("报告生成接口异常");
+                        const data = await resp.json();
+                        result.analysisReport = data.analysisReport || data;
+                    } catch (e) {
+                        alert(e.message);
+                    } finally {
+                        status.report = false;
+                        status.submitting = false;
+                    }
+                };
+
+                const extractKLineData = (data) => {
+                    if (!data) return [];
+                    if (Array.isArray(data)) return data;
+                    // 兼容 fastjson2/JavaBeans 对 getKLineData 的命名：KLineData
+                    return data.kLineData || data.klineData || data.KLineData || data.kLine || data.KLine || [];
+                };
+
+                const runKlineFirst = async (payload) => {
+                    status.submitting = true;
+                    status.kline = true;
+                    showTable.value = false;
+                    try {
+                        const resp = await fetch('/api/fate/kline', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                request: payload,
+                                requestId: requestId.value
+                            })
+                        });
+                        if (!resp.ok) throw new Error("K线生成接口异常");
+                        const data = await resp.json();
+                        result.kLineData = extractKLineData(data);
+                        if (result.kLineData.length > 0) {
+                            await nextTick();
+                            initChart(result.kLineData);
+                        }
+                    } catch (e) {
+                        alert(e.message);
+                    } finally {
+                        status.kline = false;
+                        status.submitting = false;
+                    }
+                };
+
+                const runYearlyFromCache = async (payload) => {
+                    status.submitting = true;
+                    status.yearly = true;
+                    try {
+                        const resp = await fetch('/api/fate/yearly', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+                        if (!resp.ok) throw new Error("请先执行步骤3生成K线");
+                        const data = await resp.json();
+                        // 以 kLineData 为准（包含批注），yearlyItems 备用
+                        const kLine = extractKLineData(data);
+                        if (kLine && kLine.length > 0) {
+                            result.kLineData = kLine;
+                        }
+                        result.yearlyItems = (data && data.yearlyItems) ? data.yearlyItems : (result.yearlyItems || []);
+                    } catch (e) {
+                        alert(e.message);
+                    } finally {
+                        status.yearly = false;
+                        status.submitting = false;
+                    }
+                };
+
+                // runKline 已并入 runKlineFirst（先调用 /kline，由后端统一触发 LLM）
+
+                const initChart = (kLineData) => {
+                    const chartDom = document.getElementById('kline-chart');
+                    if (!chartDom) return;
+                    if (chartInstance) chartInstance.dispose();
+                    chartInstance = echarts.init(chartDom);
+
+                    // 图二风格：底部显示年龄序号，上方显示大运分段
+                    const ages = kLineData.map(item => String((item.age ?? 0) + 1));
+                    const daYunLabels = [];
+                    let prevDy = null;
+                    for (let i = 0; i < kLineData.length; i++) {
+                        const dy = kLineData[i].daYun || '';
+                        if (i === 0 || dy !== prevDy) {
+                            daYunLabels[i] = dy;
+                        } else {
+                            daYunLabels[i] = '';
+                        }
+                        prevDy = dy;
+                    }
+                    const values = kLineData.map(item => [item.open, item.close, item.low, item.high]);
+                    const rawData = kLineData;
+
+                    const option = {
+                        backgroundColor: '#fff',
+                        animation: true,
+                        tooltip: {
+                            trigger: 'axis',
+                            axisPointer: { type: 'cross', lineStyle: { color: '#8392A5', width: 1, type: 'dashed' } },
+                            backgroundColor: 'rgba(255, 255, 255, 0.95)',
+                            borderColor: '#e2e8f0',
+                            borderWidth: 1,
+                            padding: 12,
+                            textStyle: { color: '#1e293b' },
+                            extraCssText: 'box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); border-radius: 8px;',
+                            formatter: function (params) {
+                                if (!params || params.length === 0) return '';
+                                const index = params[0].dataIndex;
+                                const item = rawData[index];
+                                const isGood = item.score >= 60;
+                                const scoreColor = isGood ? 'text-red-600' : 'text-green-600';
+                                const trendText = isGood ? '吉 (Up)' : '凶 (Down)';
+
+                                return `
+                                <div class="font-bold text-base mb-2 border-b pb-2 border-gray-100">
+                                    ${item.year} <span class="text-indigo-600">${item.ganZhi}</span>
+                                    <span class="text-gray-400 text-sm ml-1">(${item.age}岁)</span>
+                                </div>
+                                <div class="text-sm mb-1"><span class="text-gray-500 w-12 inline-block">大运:</span> ${item.daYun}</div>
+                                <div class="text-sm mb-1"><span class="text-gray-500 w-12 inline-block">评分:</span> <span class="${scoreColor} font-bold text-lg">${item.score}</span></div>
+                                <div class="text-sm mb-3"><span class="text-gray-500 w-12 inline-block">趋势:</span> ${trendText}</div>
+                                <div class="text-xs bg-slate-50 p-2.5 rounded text-slate-700 leading-relaxed border-l-2 border-indigo-500">
+                                    ${item.description || '暂无详细批注'}
+                                </div>
+                            `;
+                            }
+                        },
+                        grid: { left: '3%', right: '3%', bottom: 60, top: 50, containLabel: true },
+                        xAxis: [
+                            {
+                                type: 'category',
+                                data: ages,
+                                boundaryGap: true,
+                                axisLine: { lineStyle: { color: '#e2e8f0' } },
+                                axisLabel: { color: '#64748b', fontSize: 10, interval: 4 },
+                                axisTick: { show: false },
+                                splitLine: { show: true, lineStyle: { color: '#f1f5f9', type: 'dashed' } }
+                            },
+                            {
+                                type: 'category',
+                                data: ages,
+                                position: 'top',
+                                axisLine: { show: false },
+                                axisTick: { show: false },
+                                axisLabel: {
+                                    color: '#64748b',
+                                    fontSize: 10,
+                                    interval: 0,
+                                    formatter: function (_value, index) { return daYunLabels[index] || ''; }
+                                },
+                                splitLine: { show: false }
+                            }
+                        ],
+                        yAxis: {
+                            min: 0,
+                            max: 100,
+                            splitNumber: 4,
+                            axisLabel: { color: '#64748b' },
+                            splitLine: { lineStyle: { color: '#f1f5f9' } }
+                        },
+                        // 默认展示全图，但支持手势缩放/滚轮缩放
+                        dataZoom: [
+                            { type: 'inside', start: 0, end: 100 }
+                        ],
+                        series: [
+                            {
+                                type: 'candlestick',
+                                data: values,
+                                itemStyle: {
+                                    // 图二风格：涨绿跌红
+                                    color: '#22c55e',
+                                    color0: '#ef4444',
+                                    borderColor: '#16a34a',
+                                    borderColor0: '#dc2626',
+                                    borderWidth: 1
+                                },
+                                xAxisIndex: 0,
+                                barMaxWidth: 14,
+                                barWidth: 10
+                            }
+                        ]
+                    };
+
+                    chartInstance.setOption(option);
+                    window.addEventListener('resize', () => chartInstance.resize());
+                };
+
+                const stepButtonText = computed(() => {
+                    if (currentStep.value === 1) return '步骤1：计算八字';
+                    if (currentStep.value === 2) return '步骤2：生成报告';
+                    if (currentStep.value === 3) return '步骤3：生成K线';
+                    if (currentStep.value === 4) return '步骤4：查看流年批注';
+                    return '全部完成';
+                });
+
+                return {
+                    status,
+                    hasResult,
+                    form,
+                    result,
+                    currentStep,
+                    showTable,
+                    stepButtonText,
+                    isBusy,
+                    requestId,
+                    resetResult,
+                    runStep
+                };
+            }
+        }).mount('#app');
+    </script>
+
+    <style>
+        /* 自定义滚动条样式 */
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #f1f5f9;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background-color: #cbd5e1;
+            border-radius: 3px;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background-color: #94a3b8;
+        }
+    </style>
+
+</body>
+
+</html>
