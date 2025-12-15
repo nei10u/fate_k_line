@@ -1,0 +1,4 @@
+org.springframework.boot.env.EnvironmentPostProcessor=\
+com.nei10u.fate.config.crypto.EncryptedPropertiesEnvironmentPostProcessor
+
+

@@ -7,7 +7,9 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
+import org.springframework.util.StringUtils;
 
+import java.util.HashMap;
 import java.util.Map;
 
 @Configuration
@@ -44,9 +46,13 @@ public class OpenRouterConfig {
     @Primary
     public OpenAiChatModel openAiChatModel(OpenAiApi openAiApi) {
         // 创建OpenAiChatOptions实例，包含模型和自定义头部
-        Map<String, String> httpHeaders = Map.of(
-                "HTTP-Referer", httpReferer,
-                "X-Title", xTitle);
+        Map<String, String> httpHeaders = new HashMap<>();
+        if (StringUtils.hasText(httpReferer)) {
+            httpHeaders.put("HTTP-Referer", httpReferer);
+        }
+        if (StringUtils.hasText(xTitle)) {
+            httpHeaders.put("X-Title", xTitle);
+        }
 
         OpenAiChatOptions options = OpenAiChatOptions.builder()
                 .model(model)

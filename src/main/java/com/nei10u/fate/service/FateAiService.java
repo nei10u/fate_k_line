@@ -10,6 +10,7 @@ import com.nei10u.fate.model.YearlyBatchResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -41,6 +42,9 @@ public class FateAiService {
 
     private final ChatClient chatClient;
     private final FateCalculationService calcService;
+
+    @Value("${fate.ai.fallback-enabled:true}")
+    private boolean fallbackEnabled;
 
     public FateAiService(ChatClient.Builder builder, FateCalculationService calcService) {
         this.chatClient = builder.build();
@@ -102,11 +106,24 @@ public class FateAiService {
 
         try {
             String raw = chatClient.prompt().user(prompt).call().content();
+            log.info("report raw: {}", abbreviate(raw));
             FateAnalysisReport parsed = parseWithFastjson(raw, FateAnalysisReport.class);
-            return ensureSections(parsed);
+            if (parsed == null) {
+                String msg = "AI 输出非 JSON 或解析失败（请检查 OpenRouter 配置/模型输出）";
+                log.warn("report parse failed, fallbackEnabled={}", fallbackEnabled);
+                if (!fallbackEnabled) {
+                    throw new IllegalStateException(msg);
+                }
+                return ensureSections(null, msg);
+            }
+            return ensureSections(parsed, null);
         } catch (Exception e) {
-            System.err.println("AI 报告生成失败: " + e.getMessage());
-            return ensureSections(null);
+            String msg = "AI 报告生成失败（请检查 OpenRouter API Key / HTTP-Referer / 模型配额）";
+            log.error("{}: {}", msg, e.getMessage(), e);
+            if (!fallbackEnabled) {
+                throw e instanceof RuntimeException re ? re : new RuntimeException(e);
+            }
+            return ensureSections(null, msg);
         }
     }
 
@@ -140,8 +157,10 @@ public class FateAiService {
             YearlyBatchResult result = parseWithFastjson(raw, YearlyBatchResult.class);
             return result != null && result.getItems() != null ? result.getItems() : Collections.emptyList();
         } catch (Exception e) {
-            System.err.println("AI 流年生成失败: " + e.getMessage());
-            log.error("[{}] yearly generation failed: {}", requestId, e.getMessage());
+            log.error("[{}] AI 流年生成失败: {}", requestId, e.getMessage(), e);
+            if (!fallbackEnabled) {
+                throw e instanceof RuntimeException re ? re : new RuntimeException(e);
+            }
             return Collections.emptyList();
         }
     }
@@ -282,7 +301,7 @@ public class FateAiService {
         return rid;
     }
 
-    private FateAnalysisReport ensureSections(FateAnalysisReport report) {
+    private FateAnalysisReport ensureSections(FateAnalysisReport report, String fallbackMessage) {
         FateAnalysisReport safe = report != null ? report : new FateAnalysisReport();
         if (safe.getOverall() == null) {
             safe.setOverall(new FateAnalysisReport.Section());
@@ -299,6 +318,26 @@ public class FateAiService {
         if (safe.getLove() == null) {
             safe.setLove(new FateAnalysisReport.Section());
         }
+        if (StringUtils.hasText(fallbackMessage)) {
+            applyFallbackMessage(safe.getOverall(), fallbackMessage);
+            applyFallbackMessage(safe.getInvestment(), fallbackMessage);
+            applyFallbackMessage(safe.getCareer(), fallbackMessage);
+            applyFallbackMessage(safe.getWealth(), fallbackMessage);
+            applyFallbackMessage(safe.getLove(), fallbackMessage);
+        }
         return safe;
+    }
+
+    private void applyFallbackMessage(FateAnalysisReport.Section section, String msg) {
+        if (section == null) {
+            return;
+        }
+        if (!StringUtils.hasText(section.getSummary())) {
+            section.setSummary(msg);
+        }
+        if (!StringUtils.hasText(section.getContent())) {
+            section.setContent(msg);
+        }
+        // score 保持为默认值（0），用于前端识别“不可用/兜底”
     }
 }
