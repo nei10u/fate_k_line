@@ -501,7 +501,7 @@
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap">
                                     <span class="px-2.5 py-0.5 inline-flex text-xs font-bold rounded-full"
-                                        :class="item.score >= 60 ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'">
+                                        :class="isBullish(item) ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'">
                                         {{ item.score }}
                                     </span>
                                 </td>
@@ -603,6 +603,19 @@
                 };
 
                 const isBusy = computed(() => status.submitting || status.bazi || status.report || status.yearly || status.kline);
+
+                // 统一“牛/熊（吉/凶）”判定逻辑：
+                // 1) 优先使用后端的 trend（Bullish/Bearish）
+                // 2) 否则使用 close >= open（相对上一年的涨跌）
+                const isBullish = (item) => {
+                    const t = String(item?.trend ?? '').toLowerCase();
+                    if (t.includes('bull') || t.includes('long') || t.includes('up')) return true;
+                    if (t.includes('bear') || t.includes('short') || t.includes('down')) return false;
+                    const open = Number(item?.open);
+                    const close = Number(item?.close);
+                    if (!Number.isNaN(open) && !Number.isNaN(close)) return close >= open;
+                    return false;
+                };
 
                 const runStep = async () => {
                     if (isBusy.value) return;
@@ -781,9 +794,9 @@
                                 if (!params || params.length === 0) return '';
                                 const index = params[0].dataIndex;
                                 const item = rawData[index];
-                                const isGood = item.score >= 60;
-                                const scoreColor = isGood ? 'text-red-600' : 'text-green-600';
-                                const trendText = isGood ? '吉 (Up)' : '凶 (Down)';
+                                const bullish = isBullish(item);
+                                const scoreColor = bullish ? 'text-green-600' : 'text-red-600';
+                                const trendText = bullish ? '吉 (Long)' : '凶 (Short)';
 
                                 return `
                                 <div class="font-bold text-base mb-2 border-b pb-2 border-gray-100">
@@ -877,6 +890,7 @@
                     stepButtonText,
                     isBusy,
                     requestId,
+                    isBullish,
                     resetResult,
                     runStep
                 };
