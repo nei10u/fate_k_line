@@ -19,6 +19,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -38,9 +39,232 @@ public class FateAiService {
               "wealth": {"score": 0, "content": "", "summary": ""},
               "love": {"score": 0, "content": "", "summary": ""},
               "health": {"score": 0, "content": "", "summary": ""},
-              "family": {"score": 0, "content": "", "summary": ""},
+              "family": {"score": 0, "content": "", "summary": ""}
             }
             """;
+
+    /**
+     * 第一段：命格基线（长期均值 μ）输出格式。
+     * 仅用于 fastjson2 解析 LLM JSON 输出。
+     */
+    public static class BaselineResult {
+        private Integer baseline;
+        private String analysis;
+
+        public Integer getBaseline() {
+            return baseline;
+        }
+
+        public void setBaseline(Integer baseline) {
+            this.baseline = baseline;
+        }
+
+        public String getAnalysis() {
+            return analysis;
+        }
+
+        public void setAnalysis(String analysis) {
+            this.analysis = analysis;
+        }
+    }
+
+    /**
+     * 三段式 Prompt - 第一段输出：逐年命理事实表（纯因果层，禁止任何数值/趋势/K线字段）。
+     */
+    public static class YearlyFactsResult {
+        private List<YearlyFactItem> items;
+
+        public List<YearlyFactItem> getItems() {
+            return items;
+        }
+
+        public void setItems(List<YearlyFactItem> items) {
+            this.items = items;
+        }
+    }
+
+    public static class YearlyFactItem {
+        private int age;
+        private String dayun;
+        private String dayun_effect;
+        private String liunian;
+        private List<String> relations;
+        private String judgement; // 偏吉 / 偏凶 / 中平
+        private String comment;   // 命理事实摘要 + 现实落点提示
+
+        public int getAge() {
+            return age;
+        }
+
+        public void setAge(int age) {
+            this.age = age;
+        }
+
+        public String getDayun() {
+            return dayun;
+        }
+
+        public void setDayun(String dayun) {
+            this.dayun = dayun;
+        }
+
+        public String getDayun_effect() {
+            return dayun_effect;
+        }
+
+        public void setDayun_effect(String dayun_effect) {
+            this.dayun_effect = dayun_effect;
+        }
+
+        public String getLiunian() {
+            return liunian;
+        }
+
+        public void setLiunian(String liunian) {
+            this.liunian = liunian;
+        }
+
+        public List<String> getRelations() {
+            return relations;
+        }
+
+        public void setRelations(List<String> relations) {
+            this.relations = relations;
+        }
+
+        public String getJudgement() {
+            return judgement;
+        }
+
+        public void setJudgement(String judgement) {
+            this.judgement = judgement;
+        }
+
+        public String getComment() {
+            return comment;
+        }
+
+        public void setComment(String comment) {
+            this.comment = comment;
+        }
+    }
+
+    /**
+     * 三段式 Prompt - 第二段输出：量化规则映射表（规则层，不输出任何年龄序列/K线数据）。
+     * 这里用 Map 承载，便于后续扩展规则字段。
+     */
+    public static class QuantRuleSet {
+        private Object direction_rules;
+        private Object amplitude_rules;
+        private Object inertia_rules;
+        private Object boundary_rules;
+
+        public Object getDirection_rules() {
+            return direction_rules;
+        }
+
+        public void setDirection_rules(Object direction_rules) {
+            this.direction_rules = direction_rules;
+        }
+
+        public Object getAmplitude_rules() {
+            return amplitude_rules;
+        }
+
+        public void setAmplitude_rules(Object amplitude_rules) {
+            this.amplitude_rules = amplitude_rules;
+        }
+
+        public Object getInertia_rules() {
+            return inertia_rules;
+        }
+
+        public void setInertia_rules(Object inertia_rules) {
+            this.inertia_rules = inertia_rules;
+        }
+
+        public Object getBoundary_rules() {
+            return boundary_rules;
+        }
+
+        public void setBoundary_rules(Object boundary_rules) {
+            this.boundary_rules = boundary_rules;
+        }
+    }
+
+    /**
+     * 固定量化规则（用户提供的 JSON 规则固化到后端，避免 Prompt② 生成的不确定性）。
+     *
+     * 说明：
+     * - 规则里的 base_amplitude 是比例（0~1），后端会映射到 0~100 指数上的 delta（步长）
+     * - liunian_relation_type 通过 facts.relations 归一化提取
+     */
+    private static final class FixedQuantRules {
+        private static final Map<String, String> DIRECTION; // key = dayunEffect + "|" + relationType
+        private static final Map<String, Double> BASE_AMP;  // key = "0-20"/"21-40"/...
+        private static final Map<String, Double> DAYUN_MULT;
+        private static final Map<String, Double> REL_MULT;
+
+        private static final int MAX_CONSECUTIVE_GOOD = 3;
+        private static final double GOOD_REDUCTION = 0.8;
+        private static final int MAX_CONSECUTIVE_BAD = 3;
+        private static final double BAD_REDUCTION = 0.7;
+
+        private static final double FUYIN_MULT = 1.7;
+        private static final double FUYIN_CONTROL_LIMIT = 0.15;
+        private static final double FANYIN_MULT = 1.6;
+        private static final double FANYIN_CONTROL_LIMIT = 0.10;
+
+        private static final double HIGH_THRESHOLD = 0.9;
+        private static final double HIGH_DULL_FACTOR = 0.5;
+        private static final double LOW_THRESHOLD = 0.1;
+        private static final double LOW_PULL_FACTOR = 0.6;
+
+        static {
+            Map<String, String> dir = new HashMap<>();
+            // 扶身
+            dir.put("扶身|生", "上涨");
+            dir.put("扶身|合", "上涨");
+            dir.put("扶身|半合", "小幅波动");
+            // 克身
+            dir.put("克身|克", "下跌");
+            dir.put("克身|冲", "下跌");
+            dir.put("克身|害", "下跌");
+            // 中性
+            dir.put("中性|相冲", "小幅波动");
+            dir.put("中性|相害", "小幅波动");
+            dir.put("中性|相生", "小幅波动");
+            dir.put("中性|无明显关系", "小幅波动");
+            DIRECTION = Collections.unmodifiableMap(dir);
+
+            Map<String, Double> base = new HashMap<>();
+            base.put("0-20", 0.05);
+            base.put("21-40", 0.03);
+            base.put("41-60", 0.02);
+            base.put("61-80", 0.01);
+            base.put("81-100", 0.005);
+            BASE_AMP = Collections.unmodifiableMap(base);
+
+            Map<String, Double> dm = new HashMap<>();
+            dm.put("扶身", 1.2);
+            dm.put("克身", 1.5);
+            dm.put("中性", 1.0);
+            DAYUN_MULT = Collections.unmodifiableMap(dm);
+
+            Map<String, Double> rm = new HashMap<>();
+            rm.put("生", 1.1);
+            rm.put("克", 1.3);
+            rm.put("合", 1.05);
+            rm.put("冲", 1.4);
+            rm.put("害", 1.35);
+            rm.put("半合", 1.02);
+            // 事实层可能产出“相冲/相害/相生/无明显关系”，按 1.0 处理
+            REL_MULT = Collections.unmodifiableMap(rm);
+        }
+
+        private FixedQuantRules() {
+        }
+    }
 
     private final ChatClient chatClient;
     private final FateCalculationService calcService;
@@ -61,11 +285,12 @@ public class FateAiService {
         log.info("[{}] analyze start", requestId);
         FateResponse.BaZiInfo bazi = calculateBaZi(req);
         log.info("[{}] bazi calculated: {} {} {} {}", requestId, bazi.getYearPillar(), bazi.getMonthPillar(), bazi.getDayPillar(), bazi.getHourPillar());
+        BaselineResult baseline = generateBaseline(bazi, req.getGender(), requestId);
         FateAnalysisReport report = generateReport(bazi, req.getGender());
         log.info("[{}] report generated", requestId);
-        List<YearlyBatchResult.YearlyItem> yearlyItems = generateYearlyBatch(bazi, req.getGender(), requestId);
-        log.info("[{}] yearly & kline raw items size={}", requestId, yearlyItems.size());
-        List<FateKLinePoint> kLineData = buildKLine(req.getYear(), bazi.getDaYunList(), yearlyItems);
+        List<YearlyBatchResult.YearlyItem> yearlyItems = generateKlineItemsThreeStage(bazi, req.getGender(), baseline.getBaseline(), requestId);
+        log.info("[{}] kline raw items size={}", requestId, yearlyItems.size());
+        List<FateKLinePoint> kLineData = buildKLineWithBaseline(req.getYear(), bazi.getDaYunList(), yearlyItems, baseline.getBaseline());
         log.info("[{}] kline built: {} points", requestId, kLineData.size());
 
         FateResponse response = new FateResponse();
@@ -132,226 +357,368 @@ public class FateAiService {
     }
 
     /**
-     * 任务 B: 生成 0-80 岁流年详批（fastjson2 解析）
+     * 第一段（定盘）：生成命格基线 baseline（长期均值 μ）。
+     *
+     * 设计目标：
+     * - 只做“参数估计”，不生成任何年度、波动、K线内容
+     * - baseline 被后续 K 线建模当作均值回归中心（Mean Reversion Center）
      */
-    public List<YearlyBatchResult.YearlyItem> generateYearlyBatch(FateResponse.BaZiInfo bazi, String gender, String requestId) {
+    public BaselineResult generateBaseline(FateResponse.BaZiInfo bazi, String gender, String requestId) {
         String prompt = String.format("""
                         你是一位精通中国命理学、熟读《子平真诠》《三命通会》《穷通宝鉴》的老先生，
-                              同时具备现代统计建模意识，理解：
-                              
-                              **人生运势是一条【有界、连续、带惯性的随机游走时间序列】（Bounded Random Walk with Inertia）。**
-                              
-                              你的职责不是玄学表演，而是：
-                              **将八字与大运信息，严格映射为“符合客观人生规律的 K 线状态指数模型”。**
-                              
-                              ---
-                              
-                              ## 【一、用户基础信息】
-                              
-                              * 出生八字：%s %s %s %s
-                              * 性别：%s
-                              * 大运排盘：%s
-                              
-                              ---
-                              
-                              ## 【二、总体生成目标】
-                              
-                              请基于上述信息，为用户生成：
-                              
-                              > **【1–100 岁完整流年详批 + 人生运势 K 线数据】**
-                              
-                              ### 强制要求
-                              
-                              1. 必须覆盖 **1 岁到 100 岁，共 100 条记录**
-                              2. 每一岁都必须同时包含：
-                              
-                                 * **命理判断**
-                              
-                                   * 明确指出：刑、冲、合、害、破、穿、伏吟、反吟、十神得失
-                                   * 命理因素必须真实参与吉凶推导，禁止装饰性出现
-                                 * **现实人生影响**
-                              
-                                   * 严格结合年龄阶段，落到：学业 / 事业 / 财运 / 婚姻 / 健康 / 家庭
-                              3. 命理语言可古，但解释必须符合现代社会常识
-                              
-                                 * 禁止空话、套话、虚词堆砌
-                              
-                              ---
-                              
-                              ## 【三、人生运势 K 线建模（最高优先级约束）】
-                              
-                              ### 每年字段（不可缺失）
-                              
-                              * open
-                              * close
-                              * trend（Bullish / Bearish）
-                              * score = |close - open|
-                              * content
-                              
-                              ---
-                              
-                              ## 【四、随机游走与连续状态约束（核心机制）】
-                              
-                              ### 1️⃣ 连续性（硬约束）
-                              
-                              * 第 N 年的 `open` **必须等于** 第 N-1 年的 `close`
-                              * 严禁重新起盘、跳变、断层
-                              
-                              ---
-                              
-                              ### 2️⃣ 随机游走机制（必须遵守）
-                              
-                              人生运势变化只能来自三项叠加：
-                              
-                              ```
-                              Δ = 命理方向偏置（+ / -）
-                                + 年龄阶段波动上限
-                                + 小幅随机扰动（noise）
-                              ```
-                              
-                              * **必须存在轻微噪声**
-                              * 不允许全年同幅度、同节奏变化
-                              * 不允许“线性爬升 / 线性下跌”
-                              
-                              👉 **没有噪声 = 失败生成**
-                              
-                              ---
-                              
-                              ### 3️⃣ 吉凶 → 数值 → 趋势（强绑定）
-                              
-                              * 吉年：
-                              
-                                * close > open
-                                * trend = "Bullish"
-                              * 凶年：
-                              
-                                * close < open
-                                * trend = "Bearish"
-                              
-                              🚫 禁止：
-                              
-                              * 吉年下跌
-                              * 凶年上涨
-                              * 数值中和
-                              
-                              ---
-                              
-                              ## 【五、人生阶段客观波动边界（强制执行）】
-                              
-                              | 年龄区间     | 单年最大 |Δ| |
-                              |------------|-----------|
-                              | 1–12 岁    | ≤ 2       |
-                              | 13–25 岁   | ≤ 4       |
-                              | 26–45 岁   | ≤ 6       |
-                              | 46–65 岁   | ≤ 4       |
-                              | 66–100 岁  | ≤ 2       |
-                              
-                              * 超出即为失败输出
-                              
-                              ---
-                              
-                              ## 【六、数值边界与反射机制（关键修复点）】
-                              
-                              ### 1️⃣ 数值硬边界
-                              
-                              ```
-                              0 ≤ open ≤ 100
-                              0 ≤ close ≤ 100
-                              ```
-                              
-                              ---
-                              
-                              ### 2️⃣ 反射边界（Reflecting Boundary，必须执行）
-                              
-                              * 当 close ≥ 95：
-                              
-                                * 后续涨幅 **自动衰减**
-                                * 吉年只能微涨或横盘
-                                * 必须体现“盛极趋缓”
-                              
-                              * 当 close ≤ 5：
-                              
-                                * 后续下跌幅度自动衰减
-                                * 必须体现“物极必反”
-                              
-                              🚫 禁止：
-                              
-                              * 长期贴近 100
-                              * 单边走到极值不回头
-                              
-                              ---
-                              
-                              ## 【七、K 线内部一致性】
-                              
-                              * score 必须严格等于 |close - open|
-                              * trend 必须与数值方向一致
-                              * 所有年份形成一条 **平滑、真实、可解释的人生曲线**
-                              
-                              ---
-                              
-                              ## 【八、输出格式（绝对严格）】
-                              
-                              * 仅允许输出 **JSON**
-                              * 顶层结构必须为：
-                              
-                              {
-                              "items": [
-                              {
-                              "age": 1,
-                              "open": 58,
-                              "close": 60,
-                              "score": 2,
-                              "trend": "Bullish",
-                              "content": "……"
-                              }
-                              ]
-                              }
-                              
-                              🚫 禁止输出：
-                              
-                              * Markdown
-                              * 代码块
-                              * 解释性说明
-                              * AI、自我描述、免责声明
-                              
-                              ---
-                              
-                              ## 【九、生成规则】
-                              
-                              * 必须一次性完整生成 **1–100 岁**
-                              * 不得省略
-                              * 不得合并
-                              * 不得跳年
+                        同时具备现代统计建模意识。
+
+                        你理解：
+                        人生运势可以抽象为一个“围绕命格基础值上下波动的长期状态指数”。
+                        当前任务只做一件事：定命格基线（Baseline）。
+
+                        【一、用户基础信息】
+                        出生八字：%s %s %s %s
+                        性别：%s
+                        大运排盘：%s
+
+                        【二、任务目标（极其重要）】
+                        请基于八字结构与大运总体质量，评估此人一生的：
+                        【人生运势基础分（Life State Baseline Score）】
+
+                        这是一个 0–100 的长期均值，代表：
+                        若无流年扰动
+                        若取人生平均状态
+                        此人一生运势大致“站在什么水平线附近”
+
+                        【三、命理评估要求（必须真实参与）】
+                        你必须综合评估并明确说明：
+                        - 日主强弱
+                        - 用神 / 忌神是否清晰
+                        - 格局高低（普通 / 清 / 真 / 杂）
+                        - 大运整体走向（顺 / 逆 / 吉多 / 凶多）
+                        - 是否存在明显结构性缺陷（如财多身弱、官杀混杂等）
+
+                        🚫 禁止：
+                        - 只给结论不解释
+                        - 用空泛吉凶词汇
+
+                        【四、数值约束（硬约束）】
+                        输出一个整数 baseline，必须满足：20 ≤ baseline ≤ 80
+
+                        【五、输出格式（绝对严格）】
+                        仅允许输出 JSON，格式如下：
+                        {
+                          "baseline": 62,
+                          "analysis": "……"
+                        }
+
+                        🚫 禁止输出：
+                        Markdown、代码块、年龄、K线、任何年度描述、AI自述或免责声明
                         """,
-                bazi.getYearPillar(), bazi.getMonthPillar(), bazi.getDayPillar(), bazi.getHourPillar(), gender,
+                bazi.getYearPillar(), bazi.getMonthPillar(), bazi.getDayPillar(), bazi.getHourPillar(),
+                gender,
                 bazi.getDaYunList().toString()
         );
 
         try {
             String raw = chatClient.prompt().user(prompt).call().content();
-            log.info("[{}] yearly raw: {}", requestId, abbreviate(raw));
-            YearlyBatchResult result = parseWithFastjson(raw, YearlyBatchResult.class);
-            return result != null && result.getItems() != null ? result.getItems() : Collections.emptyList();
-        } catch (Exception e) {
-            log.error("[{}] AI 流年生成失败: {}", requestId, e.getMessage(), e);
-            if (!fallbackEnabled) {
-                throw (RuntimeException) e;
+            // baseline 输出仅用于调试，避免日志过长
+            log.info("[{}] baseline raw: {}", requestId, abbreviate(raw));
+            BaselineResult parsed = parseWithFastjson(raw, BaselineResult.class);
+            BaselineResult safe = parsed != null ? parsed : new BaselineResult();
+            int base = safe.getBaseline() == null ? 50 : safe.getBaseline();
+            // 强制约束：20..80
+            base = Math.max(20, Math.min(80, base));
+            safe.setBaseline(base);
+            if (!StringUtils.hasText(safe.getAnalysis())) {
+                safe.setAnalysis("baseline 已生成（内容为空，可能是模型输出缺失）。");
             }
-            return Collections.emptyList();
+            return safe;
+        } catch (Exception e) {
+            log.error("[{}] baseline 生成失败: {}", requestId, e.getMessage(), e);
+            if (!fallbackEnabled) {
+                throw e instanceof RuntimeException re ? re : new RuntimeException(e);
+            }
+            BaselineResult fallback = new BaselineResult();
+            fallback.setBaseline(50);
+            fallback.setAnalysis("baseline 生成失败，已使用默认值 50。");
+            return fallback;
         }
     }
 
     /**
-     * 融合逻辑：将 AI 文本/分数与 K 线结构合并。
+     * 三段式 Prompt：年度事实表 -> 量化规则 -> 规则驱动 K 线。
+     * <p>
+     * baseline：
+     * - 仍然保留（由 step1 定盘得到），但在三段式中不强制要求模型使用它做数值回归；
+     * - 后端 normalizeKlineItems(...) 会以 baseline 作为均值回归中心做最终兜底（产品级一致性）。
      */
-    public List<FateKLinePoint> buildKLine(int birthYear, List<FateResponse.DaYunInfo> daYuns, List<YearlyBatchResult.YearlyItem> aiItems) {
-        List<FateKLinePoint> points = new ArrayList<>();
-        Map<Integer, YearlyBatchResult.YearlyItem> aiMap = aiItems == null
-                ? new HashMap<>()
-                : aiItems.stream().collect(Collectors.toMap(YearlyBatchResult.YearlyItem::getAge, item -> item, (k1, k2) -> k1));
+    public List<YearlyBatchResult.YearlyItem> generateKlineItemsThreeStage(FateResponse.BaZiInfo bazi,
+                                                                          String gender,
+                                                                          int baseline,
+                                                                          String requestId) {
+        YearlyFactsResult facts = generateYearlyFacts(bazi, gender, requestId);
+        // 第二步“量化规则层”固定：不再调用 LLM（可复现、可调参）
+        // 第三步“执行层”由后端代码执行（避免模型输出 open/close 长序列失控）
+        return executeKlineFromFactsWithFixedRules(facts, baseline);
+    }
 
+    /**
+     * Prompt①：八字 -> 逐年大运事实表（禁止任何数值/K线字段）
+     */
+    public YearlyFactsResult generateYearlyFacts(FateResponse.BaZiInfo bazi, String gender, String requestId) {
+        String prompt = String.format("""
+                        你是一位精通中国命理学、熟读《子平真诠》《三命通会》《穷通宝鉴》的老先生。
+
+                        你当前只允许做命理事实推演，不允许做任何数值建模或运势量化。
+
+                        【一、用户基础信息】
+                        出生八字：%s %s %s %s
+                        性别：%s
+                        大运排盘：%s
+
+                        【二、任务目标】
+                        请基于八字与大运排盘，生成：
+                        【1–100 岁逐年大运与流年命理事实表】
+                        这是一个纯命理层的“年度事实清单”，用于后续量化，不是最终结果。
+
+                        【三、每一年必须包含（不可缺失）】
+                        对每一个年龄（1–100 岁），必须给出：
+                        - 当年所处大运（dayun）
+                        - 大运干支（dayun）
+                        - 运势性质（dayun_effect：扶身 / 克身 / 中性）
+                        - 流年作用（liunian）
+                        - 流年干支（liunian）
+                        - 与原局 / 大运的关系（relations：刑/冲/合/害/破/穿/伏吟/反吟/十神得失等）
+                        - 综合命理判断（judgement：偏吉 / 偏凶 / 中平 三选一）
+                        - 现实落点提示（comment：结合年龄阶段落到学业/事业/财运/婚姻/健康/家庭，必须具体）
+
+                        【四、严格禁止】
+                        🚫 禁止出现：
+                        - 任何数值（分数、区间、涨跌）
+                        - K线、走势、指数、趋势词
+                        - open / close / Bullish / Bearish
+                        - “整体来看”“大体不错”等模糊表述
+
+                        【五、输出格式（绝对严格）】
+                        仅允许输出 JSON，格式如下：
+                        {
+                          "items": [
+                            {
+                              "age": 1,
+                              "dayun": "甲子",
+                              "dayun_effect": "扶身",
+                              "liunian": "乙丑",
+                              "relations": ["合", "十神得力"],
+                              "judgement": "偏吉",
+                              "comment": "童年阶段家庭助力较强，体质平稳，学业启蒙顺利"
+                            }
+                          ]
+                        }
+
+                        🚫 禁止输出：Markdown、代码块、解释性说明、AI自述
+                        """,
+                bazi.getYearPillar(), bazi.getMonthPillar(), bazi.getDayPillar(), bazi.getHourPillar(),
+                gender,
+                bazi.getDaYunList().toString()
+        );
+
+        try {
+            String raw = chatClient.prompt().user(prompt).call().content();
+            log.info("[{}] facts raw: {}", requestId, abbreviate(raw));
+            YearlyFactsResult parsed = parseWithFastjson(raw, YearlyFactsResult.class);
+            return parsed != null ? parsed : new YearlyFactsResult();
+        } catch (Exception e) {
+            log.error("[{}] facts 生成失败: {}", requestId, e.getMessage(), e);
+            if (!fallbackEnabled) {
+                throw e instanceof RuntimeException re ? re : new RuntimeException(e);
+            }
+            return new YearlyFactsResult();
+        }
+    }
+
+    /**
+     * 三段式第三步执行层（后端执行，不再调用 LLM）：
+     * - 输入：facts（纯命理事实表）+ baseline
+     * - 输出：带 open/close/score/trend/content 的 items
+     *
+     * 解释：
+     * - “量化规则”已固定到代码（FixedQuantRules），因此执行完全可复现
+     * - 生成出的 items 仍会被 normalizeKlineItems(...) 再做产品级兜底
+     */
+    private List<YearlyBatchResult.YearlyItem> executeKlineFromFactsWithFixedRules(YearlyFactsResult facts, int baseline) {
+        Map<Integer, YearlyFactItem> factMap = new HashMap<>();
+        if (facts != null && facts.getItems() != null) {
+            for (YearlyFactItem it : facts.getItems()) {
+                factMap.put(it.getAge(), it);
+            }
+        }
+
+        int safeBaseline = Math.max(20, Math.min(80, baseline));
+        int open = safeBaseline;
+        int consecutiveBull = 0;
+        int consecutiveBear = 0;
+        Random rnd = new Random(42); // 固定种子：可复现（也可改为 requestId hash）
+
+        List<YearlyBatchResult.YearlyItem> items = new ArrayList<>(100);
         for (int age = 1; age <= 100; age++) {
-            int currentYear = birthYear + age;
+            YearlyFactItem fact = factMap.get(age);
+
+            String dayunEffect = fact != null && StringUtils.hasText(fact.getDayun_effect()) ? fact.getDayun_effect().trim() : "中性";
+            String relationType = normalizeRelationType(fact);
+            String direction = FixedQuantRules.DIRECTION.getOrDefault(dayunEffect + "|" + relationType, "小幅波动");
+
+            boolean bullish;
+            if ("上涨".equals(direction)) {
+                bullish = true;
+            } else if ("下跌".equals(direction)) {
+                bullish = false;
+            } else {
+                String j = fact != null ? fact.getJudgement() : null;
+                if ("偏吉".equals(j)) bullish = true;
+                else if ("偏凶".equals(j)) bullish = false;
+                else bullish = open <= safeBaseline; // 中平：向 baseline 回归
+            }
+
+            double baseAmp = FixedQuantRules.BASE_AMP.getOrDefault(ageBucket(age), 0.02);
+            double dayunMult = FixedQuantRules.DAYUN_MULT.getOrDefault(dayunEffect, 1.0);
+            double relMult = FixedQuantRules.REL_MULT.getOrDefault(relationType, 1.0);
+
+            double rawDelta = 100.0 * baseAmp * dayunMult * relMult;
+            rawDelta *= (0.85 + rnd.nextDouble() * 0.30); // 轻噪声 0.85~1.15
+            int delta = Math.max(1, (int) Math.round(rawDelta));
+
+            int maxDelta = maxDeltaByAge(age);
+            delta = Math.min(delta, maxDelta);
+
+            // 惯性：连续吉/凶超过阈值后衰减
+            if (bullish) {
+                consecutiveBull++;
+                consecutiveBear = 0;
+                if (consecutiveBull > FixedQuantRules.MAX_CONSECUTIVE_GOOD) {
+                    delta = Math.max(1, (int) Math.round(delta * Math.pow(FixedQuantRules.GOOD_REDUCTION, consecutiveBull - FixedQuantRules.MAX_CONSECUTIVE_GOOD)));
+                }
+            } else {
+                consecutiveBear++;
+                consecutiveBull = 0;
+                if (consecutiveBear > FixedQuantRules.MAX_CONSECUTIVE_BAD) {
+                    delta = Math.max(1, (int) Math.round(delta * Math.pow(FixedQuantRules.BAD_REDUCTION, consecutiveBear - FixedQuantRules.MAX_CONSECUTIVE_BAD)));
+                }
+            }
+
+            // 伏吟/反吟：放大但受控
+            if (hasKeyword(fact, "伏吟")) {
+                delta = (int) Math.round(delta * FixedQuantRules.FUYIN_MULT);
+                delta = Math.min(delta, Math.max(1, (int) Math.round(100 * FixedQuantRules.FUYIN_CONTROL_LIMIT)));
+            }
+            if (hasKeyword(fact, "反吟")) {
+                delta = (int) Math.round(delta * FixedQuantRules.FANYIN_MULT);
+                delta = Math.min(delta, Math.max(1, (int) Math.round(100 * FixedQuantRules.FANYIN_CONTROL_LIMIT)));
+            }
+
+            // 边界保护：高位钝化、低位止跌
+            double p = open / 100.0;
+            if (bullish && p >= FixedQuantRules.HIGH_THRESHOLD) {
+                delta = Math.max(1, (int) Math.round(delta * FixedQuantRules.HIGH_DULL_FACTOR));
+            }
+            if (!bullish && p <= FixedQuantRules.LOW_THRESHOLD) {
+                delta = Math.max(1, (int) Math.round(delta * FixedQuantRules.LOW_PULL_FACTOR));
+            }
+
+            // baseline 均值回归：越偏离 baseline，延续同方向越收敛
+            int drift = open - safeBaseline;
+            if (bullish && drift > 10) {
+                delta = Math.max(1, (int) Math.round(delta * 0.7));
+            }
+            if (!bullish && drift < -10) {
+                delta = Math.max(1, (int) Math.round(delta * 0.7));
+            }
+
+            int close = bullish ? open + delta : open - delta;
+            close = Math.max(0, Math.min(100, close));
+            if (bullish && close <= open) close = Math.min(100, open + 1);
+            if (!bullish && close >= open) close = Math.max(0, open - 1);
+
+            YearlyBatchResult.YearlyItem out = new YearlyBatchResult.YearlyItem();
+            out.setAge(age);
+            out.setOpen(open);
+            out.setClose(close);
+            out.setScore(Math.abs(close - open));
+            out.setTrend(bullish ? "Bullish" : "Bearish");
+            out.setContent(fact != null && StringUtils.hasText(fact.getComment()) ? fact.getComment() : (bullish ? "偏吉" : "偏凶"));
+            if (fact != null) {
+                out.setDaYun(fact.getDayun());
+                out.setGanZhi(fact.getLiunian());
+            }
+
+            items.add(out);
+            open = close;
+        }
+        return items;
+    }
+
+    private String ageBucket(int age) {
+        if (age <= 20) return "0-20";
+        if (age <= 40) return "21-40";
+        if (age <= 60) return "41-60";
+        if (age <= 80) return "61-80";
+        return "81-100";
+    }
+
+    private boolean hasKeyword(YearlyFactItem fact, String keyword) {
+        if (fact == null) return false;
+        if (fact.getRelations() != null) {
+            for (String r : fact.getRelations()) {
+                if (r != null && r.contains(keyword)) return true;
+            }
+        }
+        return fact.getComment() != null && fact.getComment().contains(keyword);
+    }
+
+    private String normalizeRelationType(YearlyFactItem fact) {
+        if (fact == null) return "无明显关系";
+        List<String> rels = fact.getRelations();
+        if (rels == null || rels.isEmpty()) return "无明显关系";
+
+        for (String r : rels) {
+            if (r == null) continue;
+            if (r.contains("相冲")) return "相冲";
+            if (r.contains("相害")) return "相害";
+            if (r.contains("相生")) return "相生";
+        }
+        for (String r : rels) {
+            if (r == null) continue;
+            if (r.contains("冲")) return "冲";
+            if (r.contains("害")) return "害";
+            if (r.contains("克")) return "克";
+            if (r.contains("半合")) return "半合";
+            if (r.contains("合")) return "合";
+            if (r.contains("生")) return "生";
+        }
+        return "无明显关系";
+    }
+
+    /**
+     * 二段式 K 线后处理与组装（产品级兜底）：
+     * <p>
+     * 输入：
+     * - aiItems：LLM 输出的 1-100 岁条目（包含 trend/content，open/close/score 可能不可靠）
+     * - baseline：第一段“定盘”得到的长期均值 μ
+     * <p>
+     * 输出（保证满足）：
+     * - 连贯：open_n = close_{n-1}
+     * - 趋势一致：Bullish => close > open；Bearish => close < open
+     * - 分数一致：score = |close-open|
+     * - 波动上限：按年龄段限制单年最大 |Δ|
+     * - 有界：open/close 限制在 [0,100] 且避免长期贴边
+     * - 均值回归：越偏离 baseline，延续同方向的幅度越小
+     */
+    public List<FateKLinePoint> buildKLineWithBaseline(int birthYear,
+                                                      List<FateResponse.DaYunInfo> daYuns,
+                                                      List<YearlyBatchResult.YearlyItem> aiItems,
+                                                      int baseline) {
+        List<YearlyBatchResult.YearlyItem> normalizedItems = normalizeKlineItems(aiItems, baseline);
+        List<FateKLinePoint> points = new ArrayList<>(normalizedItems.size());
+
+        for (YearlyBatchResult.YearlyItem item : normalizedItems) {
+            int age = item.getAge();
+            int currentYear = birthYear + (age - 1);
             String ganZhi = calcService.getYearGanZhi(currentYear);
 
             String currentDaYun = "童限";
@@ -361,43 +728,133 @@ public class FateAiService {
                 }
             }
 
-            YearlyBatchResult.YearlyItem aiItem = aiMap.get(age);
-            int score;
-            String desc;
-
-            if (aiItem != null) {
-                score = aiItem.getScore();
-                desc = aiItem.getContent();
-            } else {
-                score = 50 + (int) (Math.sin(age * 0.2) * 10);
-                desc = "流年平稳，守成在此刻。";
-            }
-
-            // K线形态统一由后端算法生成，避免 LLM 总是给出单边(全涨/全跌)导致颜色单一或无影线
-            int open = points.isEmpty() ? score : points.get(points.size() - 1).getClose();
-            int close = score;
-
-            int body = Math.abs(close - open);
-            int wick = Math.max(2, body / 3 + 2);
-
-            String trend = close >= open ? "Bullish" : "Bearish";
-            String finalGanZhi = aiItem != null && StringUtils.hasText(aiItem.getGanZhi()) ? aiItem.getGanZhi() : ganZhi;
-            String finalDaYun = aiItem != null && StringUtils.hasText(aiItem.getDaYun()) ? aiItem.getDaYun() : currentDaYun;
+            String finalGanZhi = StringUtils.hasText(item.getGanZhi()) ? item.getGanZhi() : ganZhi;
+            String finalDaYun = StringUtils.hasText(item.getDaYun()) ? item.getDaYun() : currentDaYun;
 
             FateKLinePoint point = FateKLinePoint.builder()
                     .age(age)
                     .year(currentYear)
                     .ganZhi(finalGanZhi)
                     .daYun(finalDaYun)
-                    .score(score)
-                    .open(open)
-                    .close(close)
-                    .trend(trend)
-                    .description(desc)
+                    .score(item.getScore())
+                    .open(item.getOpen() == null ? 0 : item.getOpen())
+                    .close(item.getClose() == null ? 0 : item.getClose())
+                    .trend(item.getTrend())
+                    .description(item.getContent())
                     .build();
             points.add(point);
         }
         return points;
+    }
+
+    private List<YearlyBatchResult.YearlyItem> normalizeKlineItems(List<YearlyBatchResult.YearlyItem> aiItems, int baseline) {
+        // 允许 LLM 输出不完整：这里做“最小更正”，确保 K 线模型永远可用。
+        Map<Integer, YearlyBatchResult.YearlyItem> aiMap = aiItems == null
+                ? new HashMap<>()
+                : aiItems.stream().collect(Collectors.toMap(YearlyBatchResult.YearlyItem::getAge, item -> item, (k1, k2) -> k1));
+
+        int safeBaseline = Math.max(20, Math.min(80, baseline));
+        int prevClose = safeBaseline;
+
+        List<YearlyBatchResult.YearlyItem> out = new ArrayList<>(100);
+        for (int age = 1; age <= 100; age++) {
+            YearlyBatchResult.YearlyItem raw = aiMap.get(age);
+            YearlyBatchResult.YearlyItem item = raw != null ? raw : new YearlyBatchResult.YearlyItem();
+            item.setAge(age);
+
+            int open = prevClose;
+            int maxDelta = maxDeltaByAge(age);
+
+            boolean bullish = resolveBullish(item, age, aiMap);
+            int direction = bullish ? 1 : -1;
+
+            // 期望步长：优先使用 LLM score，其次使用 LLM close/open 的差值，再兜底给一个带噪声的小步长
+            int desiredDelta = item.getScore();
+            if (desiredDelta <= 0) {
+                Integer ro = item.getOpen();
+                Integer rc = item.getClose();
+                if (ro != null && rc != null) {
+                    desiredDelta = Math.abs(rc - ro);
+                }
+            }
+            if (desiredDelta <= 0) {
+                desiredDelta = 1 + (age % Math.max(1, maxDelta)); // 轻噪声（确定性），避免全同幅度
+            }
+
+            // 年龄段上限约束
+            int delta = Math.min(desiredDelta, maxDelta);
+
+            // 均值回归：越偏离 baseline，延续偏离方向的幅度越小
+            int drift = open - safeBaseline;
+            if (direction > 0 && drift > 12) {
+                delta = Math.max(1, delta / 2);
+            } else if (direction < 0 && drift < -12) {
+                delta = Math.max(1, delta / 2);
+            }
+
+            // 边界保护：尽量避免贴边运行（使用软边界 5..95）
+            int softMin = 5;
+            int softMax = 95;
+            if (direction > 0 && open >= softMax) {
+                delta = 1; // 盛极趋缓
+            } else if (direction < 0 && open <= softMin) {
+                delta = 1; // 物极必反（但方向不翻转，只缩步）
+            }
+
+            int close = open + direction * delta;
+            close = Math.max(0, Math.min(100, close));
+
+            // 如果 clamp 导致方向不满足（极端情况下），做最小修正：再收缩一步
+            if (bullish && close <= open) {
+                close = Math.min(100, open + 1);
+            }
+            if (!bullish && close >= open) {
+                close = Math.max(0, open - 1);
+            }
+
+            // 写回：连贯、score、trend
+            item.setOpen(open);
+            item.setClose(close);
+            item.setScore(Math.abs(close - open));
+            item.setTrend(bullish ? "Bullish" : "Bearish");
+            if (!StringUtils.hasText(item.getContent())) {
+                item.setContent(bullish ? "该年运势偏吉，宜顺势而为。" : "该年运势偏凶，宜守不宜攻。");
+            }
+
+            out.add(item);
+            prevClose = close;
+        }
+        return out;
+    }
+
+    private boolean resolveBullish(YearlyBatchResult.YearlyItem item, int age, Map<Integer, YearlyBatchResult.YearlyItem> aiMap) {
+        if (item != null && StringUtils.hasText(item.getTrend())) {
+            String t = item.getTrend().trim().toLowerCase();
+            if (t.contains("bull")) return true;
+            if (t.contains("bear")) return false;
+        }
+        // 兜底：与上一年 score 比较（更贴近“吉一定更高/凶一定更低”的产品语义）
+        if (age > 1) {
+            YearlyBatchResult.YearlyItem prev = aiMap.get(age - 1);
+            if (prev != null) {
+                int currScore = item != null ? item.getScore() : 0;
+                int prevScore = prev.getScore();
+                if (currScore > 0 && prevScore > 0) {
+                    return currScore >= prevScore;
+                }
+            }
+        }
+        // 最终兜底：bullish
+        return true;
+    }
+
+    private int maxDeltaByAge(int age) {
+        // 固定量化规则对应的幅度上限（更宽松，匹配你提供的规则配置）
+        if (age <= 12) return 4;
+        if (age <= 25) return 8;
+        if (age <= 45) return 12;
+        if (age <= 65) return 8;
+        return 4;
     }
 
     private <T> T parseWithFastjson(String raw, Class<T> clazz) {

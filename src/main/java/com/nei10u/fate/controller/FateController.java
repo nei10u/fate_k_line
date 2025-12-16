@@ -39,6 +39,10 @@ public class FateController {
         String rid = ensureRequestId(request);
         log.info("[{}] step-bazi start", rid);
         FateResponse.BaZiInfo bazi = fateAiService.calculateBaZi(request);
+        // 第一段：定盘 baseline（命格长期均值 μ）
+        // 注意：baseline 不需要回传给前端（保持接口不变），但会写入缓存供 /kline 使用。
+        FateAiService.BaselineResult baseline = fateAiService.generateBaseline(bazi, request.getGender(), rid);
+        fateSessionCache.upsertBaseline(rid, bazi, baseline.getBaseline(), baseline.getAnalysis());
         log.info("[{}] step-bazi done", rid);
         StepResponse resp = new StepResponse();
         resp.setRequestId(rid);
@@ -90,14 +94,26 @@ public class FateController {
             request.setRequestId(rid);
         }
         log.info("[{}] step-kline start (llm+build)", rid);
-        FateResponse.BaZiInfo bazi = fateAiService.calculateBaZi(request);
-        // 如未传 yearlyItems，则在此处调用 LLM 一次性生成（包含批注+K线四价）
+        // 优先复用 step1 缓存的 baseline/bazi，避免重复定盘
+        Optional<FateSessionCache.CacheEntry> cached = fateSessionCache.get(rid);
+        FateResponse.BaZiInfo bazi = cached.flatMap(e -> Optional.ofNullable(e.baziInfo()))
+                .orElseGet(() -> fateAiService.calculateBaZi(request));
+        Integer baseline = cached.map(FateSessionCache.CacheEntry::baseline).orElse(null);
+        if (baseline == null) {
+            // 兜底：若未先走 /bazi，也可在 /kline 内补定盘
+            FateAiService.BaselineResult base = fateAiService.generateBaseline(bazi, request.getGender(), rid);
+            baseline = base.getBaseline();
+            fateSessionCache.upsertBaseline(rid, bazi, baseline, base.getAnalysis());
+        }
+
+        // 三段式：事实层 -> 规则层 -> 执行层（LLM 输出仍会被后端做“产品级兜底”后处理）
         List<YearlyBatchResult.YearlyItem> aiItems = payload.getYearlyItems();
         if (aiItems == null || aiItems.isEmpty()) {
-            aiItems = fateAiService.generateYearlyBatch(bazi, request.getGender(), rid);
+            aiItems = fateAiService.generateKlineItemsThreeStage(bazi, request.getGender(), baseline, rid);
         }
-        List<FateKLinePoint> kLine = fateAiService.buildKLine(request.getYear(), bazi.getDaYunList(), aiItems);
-        fateSessionCache.put(rid, aiItems, kLine);
+        List<FateKLinePoint> kLine = fateAiService.buildKLineWithBaseline(request.getYear(), bazi.getDaYunList(),
+                aiItems, baseline);
+        fateSessionCache.upsertKline(rid, aiItems, kLine);
         log.info("[{}] step-kline done size={}", rid, kLine.size());
         StepResponse resp = new StepResponse();
         resp.setRequestId(rid);
