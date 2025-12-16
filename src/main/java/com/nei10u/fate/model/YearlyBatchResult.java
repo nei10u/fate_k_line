@@ -17,8 +17,6 @@ public class YearlyBatchResult {
         // 可选：直接由 LLM 产出的 K 线数值，若缺失则由后端补齐
         private Integer open;
         private Integer close;
-        private Integer high;
-        private Integer low;
         private String trend;
 
         // 可选：直接给出干支、大运，后端若缺失会回填

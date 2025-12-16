@@ -19,8 +19,6 @@ public class FateKLinePoint {
     private int score;        // 分数 (整合 Open/Close)
     private int open;
     private int close;
-    private int high;
-    private int low;
 
     private String trend;     // Bullish/Bearish
 

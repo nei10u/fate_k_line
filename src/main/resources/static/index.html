@@ -815,16 +815,33 @@
                             const score = scores[idx];
 
                             // open：严格连贯
+                            const rawOpen = Number(item?.open);
+                            const rawClose = Number(item?.close);
+                            const hasOpen = !Number.isNaN(rawOpen);
+                            const hasClose = !Number.isNaN(rawClose);
+
                             let open;
-                            if (idx === 0) {
-                                // 首根没有“上一年”，用 0 作为基线（可视化语义更稳定）
-                                open = 0;
+                            if (idx > 0 && prevClose != null) {
+                                // 从第2根开始，原则上 open 必须等于上一年 close。
+                                // 若后端给的 open 不一致，则以“连贯性”纠正为 prevClose。
+                                open = (!hasOpen || Math.abs(rawOpen - prevClose) > 1e-9) ? prevClose : rawOpen;
                             } else {
-                                open = prevClose == null ? 0 : prevClose;
+                                // 首根没有上一年：优先用后端 open；否则用 close；再否则 0
+                                if (hasOpen) open = rawOpen;
+                                else if (hasClose) open = rawClose;
+                                else open = 0;
                             }
 
                             const bullish = isBullish(item, idx, kLineData);
-                            let close = bullish ? (open + score) : (open - score);
+                            let close = hasClose ? rawClose : (bullish ? (open + score) : (open - score));
+
+                            // 若后端给了 open/close 但不满足 |close-open|=score，则按趋势纠正 close（满足你的公式）
+                            if (score != null && hasClose) {
+                                const diff = Math.abs(close - open);
+                                if (Math.abs(diff - score) > 1e-9) {
+                                    close = bullish ? (open + score) : (open - score);
+                                }
+                            }
 
                             // 无影线矩形：low/high 收敛到实体范围
                             const low = Math.min(open, close);

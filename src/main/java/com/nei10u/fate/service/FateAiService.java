@@ -132,20 +132,64 @@ public class FateAiService {
      */
     public List<YearlyBatchResult.YearlyItem> generateYearlyBatch(FateResponse.BaZiInfo bazi, String gender, String requestId) {
         String prompt = String.format("""
-                        你是一位算命经验丰富的老先生。请为用户撰写【1-100岁流年详批全表】。
-                        用户八字：%s %s %s %s (性别：%s)。
+                        你是一位研习命理数十年的老先生，深谙「人生运势如行市，有起有伏，但自有其节律」。
+                                                
+                        请为用户撰写【1-100岁流年详批全表】。
+                                                
+                        用户八字：%s %s %s %s（性别：%s）
                         大运排盘：%s
-
-                        任务要求：
-                        1. 请生成 1岁 到 100岁 (共100条) 的流年运势分析。
-                        2. **内容风格**：参考古籍与现代结合。必须指出具体的刑冲合害。
-                           - 例如："丙午流年，子午冲，水火激战，需防心血管疾病或破财。"
-                           - 例如："甲申流年，伤官见官，职场是非多。"
-                        3. 请根据流年喜忌给出 K 线四价与趋势：open/close/high/low/trend，open和close不会一样，最大值为100，最小值为0，分数score是close-open的绝对值。
-                        4. K 线具有连贯性，当前的open是以前一年的close为基础，吉的close在上面，凶的close在下面，吉一定是比前一年的分数高，凶一定是比前一年的分数低。如果是吉，trend为Bullish，如果是凶，trend为Bearish。
-                        5. 四价和评语内容，一定要符合人的客观成长历程并结合八字测算得出结论，无需美化数据。
-                        6. 请返回 JSON 格式，包含 items 数组，禁止输出 Markdown 或代码块。
-                           输出示例：{"items":[{"age":0,"score":20,"content":"...", "open":60,"close":80,"high":65,"low":55,"trend":"Bullish"}]}
+                                                
+                        【核心任务】
+                        生成从 1 岁到 100 岁（共 100 条）的逐年流年运势分析，并以“人生 K 线”的形式量化呈现。
+                                                
+                        【命理内容要求】
+                        1. 每一年必须结合该流年的天干地支，与原局、大运之间的刑、冲、合、害、穿、破进行分析。
+                           - 示例：“丙午流年，子午相冲，水火激战，主情绪波动、心血管或财务起伏。”
+                           - 示例：“甲申流年，伤官见官，事业是非，名誉受损。”
+                                                
+                        【人生 K 线规则（非常重要）】
+                        2. 每一年需给出 K 线价：
+                           - open / close / trend
+                           - 数值范围：0–100
+                           - open ≠ close
+                           - score = |close - open|
+                                                
+                        3. K 线必须严格遵循“人生成长规律”，而非股票投机逻辑：
+                                                
+                        【年龄分段约束】
+                        - 1–12 岁：运势受家庭与先天影响，年波动 ≤ 5
+                        - 13–25 岁：学习与选择期，年波动 ≤ 10
+                        - 26–45 岁：人生主升或主跌阶段，允许年波动 ≤ 20
+                        - 46–60 岁：修正与守成期，年波动 ≤ 10
+                        - 61–100 岁：回归平稳期，年波动 ≤ 5
+                                                
+                        4. 连贯性规则：
+                           - 当年的 open 必须等于上一年的 close
+                           - 若该年为“吉年”，则 close > open，trend = Bullish
+                           - 若该年为“凶年”，则 close < open，trend = Bearish
+                           - 吉年只允许“温和走强”，凶年只允许“理性回落”，禁止极端跳变
+                                                
+                        5. K 线走势必须与命理评语一致：
+                           - 大冲、大刑 → 下行幅度更明显
+                           - 合局、喜神 → 上行但不过度
+                           - 晚年不允许出现暴涨暴跌
+                                                
+                        【输出要求】
+                        6. 请仅返回 JSON，不要输出任何解释、Markdown 或代码块。
+                                                
+                        JSON 格式如下：
+                        {
+                          "items": [
+                            {
+                              "age": 1,
+                              "score": 3,
+                              "open": 52,
+                              "close": 55,
+                              "trend": "Bullish",
+                              "content": "..."
+                            }
+                          ]
+                        }
                         """,
                 bazi.getYearPillar(), bazi.getMonthPillar(), bazi.getDayPillar(), bazi.getHourPillar(), gender,
                 bazi.getDaYunList().toString()
@@ -203,28 +247,6 @@ public class FateAiService {
 
             int body = Math.abs(close - open);
             int wick = Math.max(2, body / 3 + 2);
-            int high = Math.max(open, close) + wick;
-            int low = Math.min(open, close) - wick;
-
-            // 若 LLM 给了 high/low，做边界合并（不直接使用其 open/close）
-            if (aiItem != null && aiItem.getHigh() != null) {
-                high = Math.max(high, aiItem.getHigh());
-            }
-            if (aiItem != null && aiItem.getLow() != null) {
-                low = Math.min(low, aiItem.getLow());
-            }
-
-            // clamp 到 [0, 100]，保证图形尺度稳定
-            high = Math.min(100, Math.max(0, high));
-            low = Math.min(100, Math.max(0, low));
-
-            // 保证上下影线存在
-            if (high <= Math.max(open, close)) {
-                high = Math.min(100, Math.max(open, close) + 2);
-            }
-            if (low >= Math.min(open, close)) {
-                low = Math.max(0, Math.min(open, close) - 2);
-            }
 
             String trend = close >= open ? "Bullish" : "Bearish";
             String finalGanZhi = aiItem != null && StringUtils.hasText(aiItem.getGanZhi()) ? aiItem.getGanZhi() : ganZhi;
@@ -238,8 +260,6 @@ public class FateAiService {
                     .score(score)
                     .open(open)
                     .close(close)
-                    .high(high)
-                    .low(low)
                     .trend(trend)
                     .description(desc)
                     .build();
