@@ -399,6 +399,42 @@
                     <p v-else class="text-gray-400 text-sm line-clamp-6">AI 正在分析情感轨迹...</p>
                 </div>
 
+                <!-- 身体健康 -->
+                <div
+                    class="bg-white p-6 rounded-2xl shadow-lg border-l-4 border-emerald-500 hover:shadow-xl transition-shadow report-card">
+                    <div class="flex justify-between items-center mb-4">
+                        <h4 class="font-bold text-lg text-rose-700 flex items-center">
+                            <span class="text-2xl mr-2">🏋️</span> 身体健康
+                        </h4>
+                        <span v-if="result.analysisReport"
+                              class="px-3 py-1 bg-rose-50 text-rose-700 rounded-full text-sm font-bold">{{
+                            result.analysisReport.health.score || 0 }} 分</span>
+                        <span v-else class="text-xs text-gray-400">生成中...</span>
+                    </div>
+                    <p v-if="result.analysisReport"
+                       class="text-gray-600 leading-relaxed text-sm text-justify line-clamp-6">{{
+                        result.analysisReport.health.content }}</p>
+                    <p v-else class="text-gray-400 text-sm line-clamp-6">AI 正在分析健康轨迹...</p>
+                </div>
+
+                <!-- 六亲关系 -->
+                <div
+                    class="bg-white p-6 rounded-2xl shadow-lg border-l-4 border-rose-500 hover:shadow-xl transition-shadow report-card">
+                    <div class="flex justify-between items-center mb-4">
+                        <h4 class="font-bold text-lg text-rose-700 flex items-center">
+                            <span class="text-2xl mr-2">🏠</span> 六亲关系
+                        </h4>
+                        <span v-if="result.analysisReport"
+                              class="px-3 py-1 bg-rose-50 text-rose-700 rounded-full text-sm font-bold">{{
+                            result.analysisReport.family.score || 0 }} 分</span>
+                        <span v-else class="text-xs text-gray-400">生成中...</span>
+                    </div>
+                    <p v-if="result.analysisReport"
+                       class="text-gray-600 leading-relaxed text-sm text-justify line-clamp-6">{{
+                        result.analysisReport.family.content }}</p>
+                    <p v-else class="text-gray-400 text-sm line-clamp-6">AI 正在分析六亲轨迹...</p>
+                </div>
+
                 <!-- 评分讲解（紧凑版：避免把卡片撑高，保持与其它卡片高度一致的观感） -->
                 <div
                     class="bg-white p-6 rounded-2xl shadow-lg border-l-4 border-slate-300 hover:shadow-xl transition-shadow report-card">

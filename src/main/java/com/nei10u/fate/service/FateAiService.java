@@ -36,7 +36,9 @@ public class FateAiService {
               "investment": {"score": 0, "content": "", "summary": ""},
               "career": {"score": 0, "content": "", "summary": ""},
               "wealth": {"score": 0, "content": "", "summary": ""},
-              "love": {"score": 0, "content": "", "summary": ""}
+              "love": {"score": 0, "content": "", "summary": ""},
+              "health": {"score": 0, "content": "", "summary": ""},
+              "family": {"score": 0, "content": "", "summary": ""},
             }
             """;
 
@@ -95,7 +97,9 @@ public class FateAiService {
                         1. 命理总评：分析格局高低，喜用神。
                         2. 投资/事业：结合 "偏财"、"七杀" 等十神心性，判断适合做 Holder 还是 Degen。
                         3. 情感婚姻简述。
-                        4. 必须严格返回 JSON，不要包含 Markdown、额外引号或注释。
+                        4. 身体健康简述。
+                        5. 六亲关系简述。
+                        5. 必须严格返回 JSON，不要包含 Markdown、额外引号或注释。
 
                         输出格式示例（严格遵守键名与结构）：
                         %s
