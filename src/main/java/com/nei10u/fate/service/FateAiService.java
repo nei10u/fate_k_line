@@ -222,7 +222,7 @@ public class FateAiService {
                 ? new HashMap<>()
                 : aiItems.stream().collect(Collectors.toMap(YearlyBatchResult.YearlyItem::getAge, item -> item, (k1, k2) -> k1));
 
-        for (int age = 0; age <= 80; age++) {
+        for (int age = 1; age <= 100; age++) {
             int currentYear = birthYear + age;
             String ganZhi = calcService.getYearGanZhi(currentYear);
 
