@@ -200,6 +200,12 @@ public class FateAiService {
      * - liunian_relation_type 通过 facts.relations 归一化提取
      */
     private static final class FixedQuantRules {
+        /**
+         * K线柱体放大系数：
+         * - 用户希望“柱体太短，放大2倍”
+         * - 该系数作用于执行层的 delta（步长），并会在后续再被年龄段上限 clamp
+         */
+        private static final double KLINE_DELTA_SCALE = 2.0;
         private static final Map<String, String> DIRECTION; // key = dayunEffect + "|" + relationType
         private static final Map<String, Double> BASE_AMP;  // key = "0-20"/"21-40"/...
         private static final Map<String, Double> DAYUN_MULT;
@@ -288,9 +294,9 @@ public class FateAiService {
         BaselineResult baseline = generateBaseline(bazi, req.getGender(), requestId);
         FateAnalysisReport report = generateReport(bazi, req.getGender());
         log.info("[{}] report generated", requestId);
-        List<YearlyBatchResult.YearlyItem> yearlyItems = generateKlineItemsThreeStage(bazi, req.getGender(), baseline.getBaseline(), requestId);
-        log.info("[{}] kline raw items size={}", requestId, yearlyItems.size());
-        List<FateKLinePoint> kLineData = buildKLineWithBaseline(req.getYear(), bazi.getDaYunList(), yearlyItems, baseline.getBaseline());
+        List<YearlyBatchResult.YearlyItem> yearlyItems = generateYearlyScoresOneShot(bazi, req.getGender(), baseline.getBaseline(), requestId);
+        log.info("[{}] yearly score items size={}", requestId, yearlyItems.size());
+        List<FateKLinePoint> kLineData = buildKLineFromYearlyScores(req.getYear(), bazi.getDaYunList(), yearlyItems, baseline.getBaseline());
         log.info("[{}] kline built: {} points", requestId, kLineData.size());
 
         FateResponse response = new FateResponse();
@@ -393,8 +399,8 @@ public class FateAiService {
                         - 格局高低（普通 / 清 / 真 / 杂）
                         - 大运整体走向（顺 / 逆 / 吉多 / 凶多）
                         - 是否存在明显结构性缺陷（如财多身弱、官杀混杂等）
-
-                        🚫 禁止：
+                              
+                              🚫 禁止：
                         - 只给结论不解释
                         - 用空泛吉凶词汇
 
@@ -406,9 +412,9 @@ public class FateAiService {
                         {
                           "baseline": 62,
                           "analysis": "……"
-                        }
-
-                        🚫 禁止输出：
+                              }
+                              
+                              🚫 禁止输出：
                         Markdown、代码块、年龄、K线、任何年度描述、AI自述或免责声明
                         """,
                 bazi.getYearPillar(), bazi.getMonthPillar(), bazi.getDayPillar(), bazi.getHourPillar(),
@@ -440,6 +446,151 @@ public class FateAiService {
             fallback.setAnalysis("baseline 生成失败，已使用默认值 50。");
             return fallback;
         }
+    }
+
+    /**
+     * 单次生成（回到“最初一次生成”的方案）：
+     * - LLM 只输出 1-100 岁每年的“绝对分数 score（1-100）+批注 content”
+     * - K 线的 open/close/trend 由后端严格按规则派生：
+     *   - 第 1 年 open = baseline
+     *   - 第 N 年 open = 第 N-1 年 close
+     *   - 第 N 年 close = 当年 score
+     *   - close > open => Bullish（绿）；否则 Bearish（红）
+     *
+     * 这样可以避免让模型同时维护长序列一致性（连续性/颜色/边界），把一致性交给后端。
+     */
+    public List<YearlyBatchResult.YearlyItem> generateYearlyScoresOneShot(FateResponse.BaZiInfo bazi,
+                                                                         String gender,
+                                                                         int baseline,
+                                                                         String requestId) {
+        int safeBaseline = Math.max(20, Math.min(80, baseline));
+        String prompt = String.format("""
+                        你是一位精通“八字命理”与“金融数据分析”的专家。请基于我提供的八字信息，模拟生成一份长达 80 年的“人生运势 K 线数据”。
+                                                
+                        # Input Data (八字)
+                        - 年柱：%s
+                        - 月柱：%s
+                        - 日柱：%s
+                        - 时柱：%s
+                        - 大运方向：逆行（1岁起运）
+                        - 大运序列参考：
+                          %s
+                                                
+                        # Algorithms (评分逻辑)
+                        1. **基础分 (Base):** 初始分设为 %s。
+                        2. **大运分 (Trend):** 根据上述大运序列设定底分区间。例如“癸酉/壬申”运底分在 80-90，“甲戌/庚午”运底分在 40-50。
+                        3. **流年波动 (Volatility):**
+                           - 遇到“金/水”流年（如申、酉、亥、子、庚、辛、壬、癸），当年分数显著上涨。
+                           - 遇到“火/土”流年（如巳、午、未、戌、丙、丁、戊、己），当年分数下跌或调整。
+                        4. **K线连续性规则 (核心):**
+                           - 第 N 年的 `open` 必须严格等于第 N-1 年的 `close`。
+                           - `close` 由当年的运势打分决定。
+                           - `score` 字段直接取当年的 `close` 值。
+                        5. 一年一条数据，预测80年，一共80条数据。
+                        6. **content 必须包含命理依据 + 现实影响（结合年龄阶段）**
+                        
+                        # Output Format (严格 JSON)
+                        请仅输出一个 JSON 对象，包含一个 "items" 数组。不要包含任何 Markdown 代码块标记（如 ```json），也不要包含任何解释性文字。
+                                                
+                        JSON 结构示例：
+                        {
+                          "items": [
+                            {"age": 1, "open": 50, "close": 55, "content": "..."},
+                            {"age": 2, "open": 55, "close": 52,"content": "..."},
+                            // ... 直到 age 80
+                          ]
+                        }
+                        请开始生成JSON数据
+                        """,
+                bazi.getYearPillar(), bazi.getMonthPillar(), bazi.getDayPillar(), bazi.getHourPillar(),
+                bazi.getDaYunList().toString(),
+                safeBaseline
+        );
+
+        try {
+            String raw = chatClient.prompt().user(prompt).call().content();
+            log.info("[{}] yearly-score raw: {}", requestId, raw);
+            YearlyBatchResult result = parseWithFastjson(raw, YearlyBatchResult.class);
+            if (result == null || result.getItems() == null) {
+                return Collections.emptyList();
+            }
+            // 兼容模型输出仅包含 open/close/content（未显式输出 score）的情况：
+            // - 后端的 K 线构建依赖“年度绝对分数”，此时可将 close 视为年度分数。
+            for (YearlyBatchResult.YearlyItem it : result.getItems()) {
+                if (it == null) {
+                    continue;
+                }
+                if (it.getScore() <= 0 && it.getClose() != null) {
+                    it.setScore(it.getClose());
+                }
+            }
+            return result.getItems();
+        } catch (Exception e) {
+            log.error("[{}] yearly-score 生成失败: {}", requestId, e.getMessage(), e);
+            if (!fallbackEnabled) {
+                throw (RuntimeException) e;
+            }
+            return Collections.emptyList();
+        }
+    }
+
+    /**
+     * 将“年度绝对分数序列”映射为 K 线点位（后端保证连续性与颜色判定一致性）。
+     */
+    public List<FateKLinePoint> buildKLineFromYearlyScores(int birthYear,
+                                                          List<FateResponse.DaYunInfo> daYuns,
+                                                          List<YearlyBatchResult.YearlyItem> aiItems,
+                                                          int baseline) {
+        Map<Integer, YearlyBatchResult.YearlyItem> aiMap = aiItems == null
+                ? new HashMap<>()
+                : aiItems.stream().collect(Collectors.toMap(YearlyBatchResult.YearlyItem::getAge, it -> it, (a, b) -> a));
+
+        int prevClose = Math.max(20, Math.min(80, baseline));
+        List<FateKLinePoint> points = new ArrayList<>(80);
+
+        for (int age = 1; age <= 80; age++) {
+            int currentYear = birthYear + (age - 1);
+            String ganZhi = calcService.getYearGanZhi(currentYear);
+
+            String currentDaYun = "童限";
+            for (FateResponse.DaYunInfo dy : daYuns) {
+                if (age >= dy.getStartAge()) {
+                    currentDaYun = dy.getGanZhi();
+                }
+            }
+
+            YearlyBatchResult.YearlyItem ai = aiMap.get(age);
+            // 兼容模型输出：
+            // - 若输出了 close（绝对分数），优先使用 close
+            // - 否则退化为 score
+            Integer modelClose = ai != null ? ai.getClose() : null;
+            int closeScore = modelClose != null ? modelClose : (ai != null ? ai.getScore() : prevClose);
+            closeScore = Math.max(1, Math.min(100, closeScore));
+
+            int open = prevClose;
+            int close = closeScore;
+            String trend = close > open ? "Bullish" : "Bearish";
+            int score = Math.abs(close - open);
+
+            String desc = ai != null && StringUtils.hasText(ai.getContent()) ? ai.getContent() : "当年运势已生成。";
+            String finalGanZhi = ai != null && StringUtils.hasText(ai.getGanZhi()) ? ai.getGanZhi() : ganZhi;
+            String finalDaYun = ai != null && StringUtils.hasText(ai.getDaYun()) ? ai.getDaYun() : currentDaYun;
+
+            FateKLinePoint point = FateKLinePoint.builder()
+                    .age(age)
+                    .year(currentYear)
+                    .ganZhi(finalGanZhi)
+                    .daYun(finalDaYun)
+                    .score(score)
+                    .open(open)
+                    .close(close)
+                    .trend(trend)
+                    .description(desc)
+                    .build();
+            points.add(point);
+            prevClose = close;
+        }
+        return points;
     }
 
     /**
@@ -498,9 +649,9 @@ public class FateAiService {
 
                         【五、输出格式（绝对严格）】
                         仅允许输出 JSON，格式如下：
-                        {
-                          "items": [
-                            {
+                              {
+                              "items": [
+                              {
                               "age": 1,
                               "dayun": "甲子",
                               "dayun_effect": "扶身",
@@ -527,7 +678,7 @@ public class FateAiService {
         } catch (Exception e) {
             log.error("[{}] facts 生成失败: {}", requestId, e.getMessage(), e);
             if (!fallbackEnabled) {
-                throw e instanceof RuntimeException re ? re : new RuntimeException(e);
+                throw (RuntimeException) e;
             }
             return new YearlyFactsResult();
         }
@@ -560,9 +711,9 @@ public class FateAiService {
         for (int age = 1; age <= 100; age++) {
             YearlyFactItem fact = factMap.get(age);
 
-            String dayunEffect = fact != null && StringUtils.hasText(fact.getDayun_effect()) ? fact.getDayun_effect().trim() : "中性";
+            String daYunEffect = fact != null && StringUtils.hasText(fact.getDayun_effect()) ? fact.getDayun_effect().trim() : "中性";
             String relationType = normalizeRelationType(fact);
-            String direction = FixedQuantRules.DIRECTION.getOrDefault(dayunEffect + "|" + relationType, "小幅波动");
+            String direction = FixedQuantRules.DIRECTION.getOrDefault(daYunEffect + "|" + relationType, "小幅波动");
 
             boolean bullish;
             if ("上涨".equals(direction)) {
@@ -577,10 +728,10 @@ public class FateAiService {
             }
 
             double baseAmp = FixedQuantRules.BASE_AMP.getOrDefault(ageBucket(age), 0.02);
-            double dayunMult = FixedQuantRules.DAYUN_MULT.getOrDefault(dayunEffect, 1.0);
+            double daYunMult = FixedQuantRules.DAYUN_MULT.getOrDefault(daYunEffect, 1.0);
             double relMult = FixedQuantRules.REL_MULT.getOrDefault(relationType, 1.0);
 
-            double rawDelta = 100.0 * baseAmp * dayunMult * relMult;
+            double rawDelta = 100.0 * baseAmp * daYunMult * relMult * FixedQuantRules.KLINE_DELTA_SCALE;
             rawDelta *= (0.85 + rnd.nextDouble() * 0.30); // 轻噪声 0.85~1.15
             int delta = Math.max(1, (int) Math.round(rawDelta));
 
@@ -782,7 +933,9 @@ public class FateAiService {
             }
 
             // 年龄段上限约束
-            int delta = Math.min(desiredDelta, maxDelta);
+            // 柱体放大 2 倍（与固定规则执行层保持一致）
+            int scaledDelta = Math.max(1, desiredDelta * 2);
+            int delta = Math.min(scaledDelta, maxDelta);
 
             // 均值回归：越偏离 baseline，延续偏离方向的幅度越小
             int drift = open - safeBaseline;

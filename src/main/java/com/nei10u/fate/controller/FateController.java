@@ -109,9 +109,10 @@ public class FateController {
         // 三段式：事实层 -> 规则层 -> 执行层（LLM 输出仍会被后端做“产品级兜底”后处理）
         List<YearlyBatchResult.YearlyItem> aiItems = payload.getYearlyItems();
         if (aiItems == null || aiItems.isEmpty()) {
-            aiItems = fateAiService.generateKlineItemsThreeStage(bazi, request.getGender(), baseline, rid);
+            // 回到“一次性生成年度分数”的方案：模型只输出 score+content，K线连贯/红绿由后端派生
+            aiItems = fateAiService.generateYearlyScoresOneShot(bazi, request.getGender(), baseline, rid);
         }
-        List<FateKLinePoint> kLine = fateAiService.buildKLineWithBaseline(request.getYear(), bazi.getDaYunList(),
+        List<FateKLinePoint> kLine = fateAiService.buildKLineFromYearlyScores(request.getYear(), bazi.getDaYunList(),
                 aiItems, baseline);
         fateSessionCache.upsertKline(rid, aiItems, kLine);
         log.info("[{}] step-kline done size={}", rid, kLine.size());

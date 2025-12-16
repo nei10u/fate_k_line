@@ -407,12 +407,12 @@
                             <span class="text-2xl mr-2">🏋️</span> 身体健康
                         </h4>
                         <span v-if="result.analysisReport"
-                              class="px-3 py-1 bg-rose-50 text-rose-700 rounded-full text-sm font-bold">{{
+                            class="px-3 py-1 bg-rose-50 text-rose-700 rounded-full text-sm font-bold">{{
                             result.analysisReport.health.score || 0 }} 分</span>
                         <span v-else class="text-xs text-gray-400">生成中...</span>
                     </div>
                     <p v-if="result.analysisReport"
-                       class="text-gray-600 leading-relaxed text-sm text-justify line-clamp-6">{{
+                        class="text-gray-600 leading-relaxed text-sm text-justify line-clamp-6">{{
                         result.analysisReport.health.content }}</p>
                     <p v-else class="text-gray-400 text-sm line-clamp-6">AI 正在分析健康轨迹...</p>
                 </div>
@@ -425,12 +425,12 @@
                             <span class="text-2xl mr-2">🏠</span> 六亲关系
                         </h4>
                         <span v-if="result.analysisReport"
-                              class="px-3 py-1 bg-rose-50 text-rose-700 rounded-full text-sm font-bold">{{
+                            class="px-3 py-1 bg-rose-50 text-rose-700 rounded-full text-sm font-bold">{{
                             result.analysisReport.family.score || 0 }} 分</span>
                         <span v-else class="text-xs text-gray-400">生成中...</span>
                     </div>
                     <p v-if="result.analysisReport"
-                       class="text-gray-600 leading-relaxed text-sm text-justify line-clamp-6">{{
+                        class="text-gray-600 leading-relaxed text-sm text-justify line-clamp-6">{{
                         result.analysisReport.family.content }}</p>
                     <p v-else class="text-gray-400 text-sm line-clamp-6">AI 正在分析六亲轨迹...</p>
                 </div>
@@ -755,6 +755,59 @@
                     return data.kLineData || data.klineData || data.KLineData || data.kLine || data.KLine || [];
                 };
 
+                // 兼容后端/LLM 不同字段结构：将数据归一化成前端可稳定渲染的结构
+                // - 允许缺失 year/ganZhi/daYun/trend/score/description
+                // - 强制连贯：open_n = close_{n-1}（若输入不连贯则纠正）
+                // - score 缺失则用 |close-open|
+                // - trend 缺失则按 close>open 推导
+                const normalizeKLineDataForUi = (arr) => {
+                    if (!Array.isArray(arr) || arr.length === 0) return [];
+                    let prevClose = null;
+                    return arr.map((raw, idx) => {
+                        const item = raw || {};
+                        const age = Number(item.age ?? (idx + 1));
+                        let open = Number(item.open);
+                        let close = Number(item.close);
+
+                        // 兜底：若 open/close 缺失，用 score 或 0 补齐
+                        if (Number.isNaN(close)) close = Number(item.score);
+                        if (Number.isNaN(close)) close = 0;
+                        if (Number.isNaN(open)) open = prevClose == null ? close : prevClose;
+
+                        // clamp 到 [0,100]（避免异常值导致图表缩放失控）
+                        open = Math.max(0, Math.min(100, open));
+                        close = Math.max(0, Math.min(100, close));
+
+                        // 强制连贯
+                        if (idx > 0 && prevClose != null && Math.abs(open - prevClose) > 1e-9) {
+                            open = prevClose;
+                        }
+
+                        // score/trend/description 归一化
+                        let score = Number(item.score);
+                        if (Number.isNaN(score)) score = Math.abs(close - open);
+                        score = Math.max(0, Math.min(100, score));
+
+                        let trend = String(item.trend ?? '').trim();
+                        if (!trend) trend = close > open ? 'Bullish' : 'Bearish';
+
+                        const year = item.year ?? (Number(form.value?.year ?? 0) + age - 1);
+                        const description = item.description || item.content || item.comment || '';
+
+                        prevClose = close;
+                        return {
+                            ...item,
+                            age,
+                            year,
+                            open,
+                            close,
+                            score,
+                            trend,
+                            description
+                        };
+                    });
+                };
+
                 const runKlineFirst = async (payload) => {
                     status.submitting = true;
                     status.kline = true;
@@ -770,7 +823,7 @@
                         });
                         if (!resp.ok) throw new Error("K线生成接口异常");
                         const data = await resp.json();
-                        result.kLineData = extractKLineData(data);
+                        result.kLineData = normalizeKLineDataForUi(extractKLineData(data));
                         if (result.kLineData.length > 0) {
                             await nextTick();
                             initChart(result.kLineData);
@@ -797,7 +850,7 @@
                         // 以 kLineData 为准（包含批注），yearlyItems 备用
                         const kLine = extractKLineData(data);
                         if (kLine && kLine.length > 0) {
-                            result.kLineData = kLine;
+                            result.kLineData = normalizeKLineDataForUi(kLine);
                         }
                         result.yearlyItems = (data && data.yearlyItems) ? data.yearlyItems : (result.yearlyItems || []);
                     } catch (e) {
@@ -817,7 +870,7 @@
                     chartInstance = echarts.init(chartDom);
 
                     // 图二风格：底部显示年龄序号，上方显示大运分段
-                    const ages = kLineData.map(item => String((item.age ?? 0) + 1));
+                    const ages = kLineData.map(item => String(item.age ?? ''));
                     const daYunLabels = [];
                     let prevDy = null;
                     for (let i = 0; i < kLineData.length; i++) {
@@ -829,73 +882,23 @@
                         }
                         prevDy = dy;
                     }
-                    // 两种视图：
-                    // 1) continuous: 连贯K线（open=上一年close, close=当年score），实体高度=两年差值
-                    // 2) absolute: 分数蜡烛（从0到score），实体高度=score
-                    // 共同点：无影线矩形（low/high 收敛到实体范围），颜色由 trend/上一年对比决定
-
-                    // 预计算每年的 score（作为 close 的语义）
-                    const scores = kLineData.map(item => {
-                        let s = Number(item?.score ?? item?.close ?? 0);
-                        if (Number.isNaN(s)) s = 0;
-                        return Math.max(0, Math.min(100, s));
+                    // 画图原则：优先信任后端给的 open/close（已在 normalizeKLineDataForUi 中保证连贯与边界）
+                    // 仅做“无影线矩形”：low/high 收敛到实体范围
+                    const valuesContinuous = kLineData.map(item => {
+                        const open = Number(item.open ?? 0);
+                        const close = Number(item.close ?? 0);
+                        const low = Math.min(open, close);
+                        const high = Math.max(open, close);
+                        return [open, close, low, high];
                     });
 
-                    const valuesContinuous = (() => {
-                        // 约束：
-                        // 1) open = 上一年 close
-                        // 2) |close - open| = 当年 score
-                        // 3) 吉/凶方向由 trend（优先）或“与前一年 score 比较”决定
-                        let prevClose = null;
-                        return kLineData.map((item, idx) => {
-                            const score = scores[idx];
-
-                            // open：严格连贯
-                            const rawOpen = Number(item?.open);
-                            const rawClose = Number(item?.close);
-                            const hasOpen = !Number.isNaN(rawOpen);
-                            const hasClose = !Number.isNaN(rawClose);
-
-                            let open;
-                            if (idx > 0 && prevClose != null) {
-                                // 从第2根开始，原则上 open 必须等于上一年 close。
-                                // 若后端给的 open 不一致，则以“连贯性”纠正为 prevClose。
-                                open = (!hasOpen || Math.abs(rawOpen - prevClose) > 1e-9) ? prevClose : rawOpen;
-                            } else {
-                                // 首根没有上一年：优先用后端 open；否则用 close；再否则 0
-                                if (hasOpen) open = rawOpen;
-                                else if (hasClose) open = rawClose;
-                                else open = 0;
-                            }
-
-                            const bullish = isBullish(item, idx, kLineData);
-                            let close = hasClose ? rawClose : (bullish ? (open + score) : (open - score));
-
-                            // 若后端给了 open/close 但不满足 |close-open|=score，则按趋势纠正 close（满足你的公式）
-                            if (score != null && hasClose) {
-                                const diff = Math.abs(close - open);
-                                if (Math.abs(diff - score) > 1e-9) {
-                                    close = bullish ? (open + score) : (open - score);
-                                }
-                            }
-
-                            // 无影线矩形：low/high 收敛到实体范围
-                            const low = Math.min(open, close);
-                            const high = Math.max(open, close);
-
-                            prevClose = close;
-                            return [open, close, low, high];
-                        });
-                    })();
-
+                    // 分数蜡烛视图：从 0 到 score（方便直观看“绝对评分”）
                     const valuesAbsolute = kLineData.map((item, idx) => {
-                        const score = scores[idx];
+                        const score = Number(item.score ?? 0);
                         const bullish = isBullish(item, idx, kLineData);
                         const open = bullish ? 0 : score;
                         const close = bullish ? score : 0;
-                        const low = 0;
-                        const high = score;
-                        return [open, close, low, high];
+                        return [open, close, 0, score];
                     });
 
                     const values = chartMode.value === 'absolute' ? valuesAbsolute : valuesContinuous;
@@ -962,9 +965,8 @@
                             }
                         ],
                         yAxis: {
-                            // 既保留 0~100 的参考，又允许“连贯K线”按 score 累积漂移不被裁剪
-                            min: function (val) { return Math.floor(Math.min(0, val.min)); },
-                            max: function (val) { return Math.ceil(Math.max(100, val.max)); },
+                            min: 0,
+                            max: 100,
                             splitNumber: 4,
                             axisLabel: { color: '#64748b' },
                             splitLine: { lineStyle: { color: '#f1f5f9' } }
