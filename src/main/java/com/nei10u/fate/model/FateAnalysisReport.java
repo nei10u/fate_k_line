@@ -9,6 +9,8 @@ public class FateAnalysisReport {
     private Section career;        // 事业分析
     private Section wealth;        // 财富层级
     private Section love;          // 情感婚姻
+    private Section health;        // 身体健康
+    private Section family;        // 六亲关系
 
     @Data
     public static class Section {

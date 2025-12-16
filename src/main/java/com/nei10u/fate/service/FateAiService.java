@@ -342,12 +342,20 @@ public class FateAiService {
         if (safe.getLove() == null) {
             safe.setLove(new FateAnalysisReport.Section());
         }
+        if (safe.getHealth() == null) {
+            safe.setHealth(new FateAnalysisReport.Section());
+        }
+        if (safe.getFamily() == null) {
+            safe.setFamily(new FateAnalysisReport.Section());
+        }
         if (StringUtils.hasText(fallbackMessage)) {
             applyFallbackMessage(safe.getOverall(), fallbackMessage);
             applyFallbackMessage(safe.getInvestment(), fallbackMessage);
             applyFallbackMessage(safe.getCareer(), fallbackMessage);
             applyFallbackMessage(safe.getWealth(), fallbackMessage);
             applyFallbackMessage(safe.getLove(), fallbackMessage);
+            applyFallbackMessage(safe.getHealth(), fallbackMessage);
+            applyFallbackMessage(safe.getFamily(), fallbackMessage);
         }
         return safe;
     }
