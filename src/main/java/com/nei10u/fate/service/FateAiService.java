@@ -410,7 +410,7 @@ public class FateAiService {
                         【五、输出格式（绝对严格）】
                         仅允许输出 JSON，格式如下：
                         {
-                          "baseline": 62,
+                          "baseline": x,
                           "analysis": "……"
                               }
                               
